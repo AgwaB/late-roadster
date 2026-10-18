@@ -2,7 +2,7 @@
 
 90 seconds. 8:58:30 → 9:00:00. Flip over traffic, drive on tunnel ceilings, don't be late. Every stunt earns VIEWS; twelve clips wait to be filmed on the way.
 
-Play: https://late-roadster.pages.dev · Spec: [SPEC.md](SPEC.md) · Code: MIT ([LICENSE](LICENSE)); assets keep their own licenses (see Credits).
+Play: <https://late-roadster.pages.dev> · Spec: [SPEC.md](SPEC.md) · Code: MIT ([LICENSE](LICENSE)); assets keep their own licenses (see Credits).
 
 The working notes (`research/`: prompts, reference images, reviews) are not part of the public repository; paths into it in `tools/` and the docs point at the author's checkout.
 
