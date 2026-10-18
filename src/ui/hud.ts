@@ -252,7 +252,8 @@ export class Hud {
     // round-4 key art (KA_01) behind the result card; its top-left is left empty for the title
     this.result.style.setProperty(
       "--ka",
-      `url("${import.meta.env.BASE_URL}assets/photo/KA_01.webp")`,
+      // (absolute, as in the lobby: a relative url() here resolves against the stylesheet, not the page)
+      `url("${new URL(import.meta.env.BASE_URL + "assets/photo/KA_01.webp", document.baseURI).href}")`,
     );
     el("div", "rtitle", this.result, "LATE ROADSTER");
     // one panel in the lobby's style (its stat tiles, section labels and buttons), the arrival photo pinned beside it

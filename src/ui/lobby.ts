@@ -127,9 +127,13 @@ export class Lobby {
   ) {
     const base = import.meta.env.BASE_URL;
     this.root = el("div", "lobby", parent);
+    // absolute: a relative url() in a custom property resolves against the stylesheet that uses it (assets/), not the
+    // page, so with the production base "./" it pointed at assets/assets/... and the key art never showed on the site
     this.root.style.setProperty(
       "--ka",
-      'url("' + base + 'assets/photo/KA_01.webp")',
+      'url("' +
+        new URL(base + "assets/photo/KA_01.webp", document.baseURI).href +
+        '")',
     );
     const panel = el("div", "lb-panel", this.root);
     const left = el("div", "lb-left", panel);
