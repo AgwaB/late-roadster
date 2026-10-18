@@ -1,0 +1,163 @@
+poly.pizza models shipped with Late Roadster
+
+Attribution applies to the original works and their modified in-game versions.
+Normalization/material changes occur at load time in src/render/assets.ts;
+meshopt/WebP optimisation is performed by tools/optimize_glb.mjs and tools/optimize_assets.sh.
+WebP conversion applies to models with embedded textures; textureless models have none to convert.
+No endorsement by the original creators is implied.
+
+1mkmFkAz5v.glb — Sports Car
+Author: Quaternius
+Source: https://poly.pizza/m/1mkmFkAz5v
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+unqqkULtRU.glb — Car
+Author: Quaternius
+Source: https://poly.pizza/m/unqqkULtRU
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+Cz6yDaUcM9.glb — Car
+Author: Quaternius
+Source: https://poly.pizza/m/Cz6yDaUcM9
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+xsMtZhBkxL.glb — SUV
+Author: Quaternius
+Source: https://poly.pizza/m/xsMtZhBkxL
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+BwwnUrWGmV.glb — Police Car
+Author: Quaternius
+Source: https://poly.pizza/m/BwwnUrWGmV
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+x43lOScTpN.glb — Taxi
+Author: Quaternius
+Source: https://poly.pizza/m/x43lOScTpN
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+cXw6oiFtZ8.glb — Truck
+Author: Quaternius
+Source: https://poly.pizza/m/cXw6oiFtZ8
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+qn4grQgHm8.glb — Pickup Truck
+Author: Quaternius
+Source: https://poly.pizza/m/qn4grQgHm8
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+BG0KAhmGDt.glb — Car Hatchback
+Author: Kay Lousberg
+Source: https://poly.pizza/m/BG0KAhmGDt
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+vTTTjDoxhV.glb — Stationwagon
+Author: Kay Lousberg
+Source: https://poly.pizza/m/vTTTjDoxhV
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+aT_24cDaW1a.glb — Van
+Author: Poly by Google
+Source: https://poly.pizza/m/aT_24cDaW1a
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+dggOiBLYyuR.glb — Convertible
+Author: Poly by Google
+Source: https://poly.pizza/m/dggOiBLYyuR
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+4CPpvEmrMoF.glb — Bus
+Author: Poly by Google
+Source: https://poly.pizza/m/4CPpvEmrMoF
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+fFCCghvRImG.glb — Montreal Bus
+Author: Nick Ladd
+Source: https://poly.pizza/m/fFCCghvRImG
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+57rxXzowK8w.glb — Traffic light
+Author: Poly by Google
+Source: https://poly.pizza/m/57rxXzowK8w
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+OWczicNWhO.glb — Bus Stop
+Author: Zsky
+Source: https://poly.pizza/m/OWczicNWhO
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+60GyU9CdZ9r.glb — Stop sign
+Author: Poly by Google
+Source: https://poly.pizza/m/60GyU9CdZ9r
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+i7HDuYDLkx.glb — Trashcan Small
+Author: Quaternius
+Source: https://poly.pizza/m/i7HDuYDLkx
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+dOSjmdmKaxi.glb — Bench
+Author: Ev Amitay
+Source: https://poly.pizza/m/dOSjmdmKaxi
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+e5jmUgocmaT.glb — Billboard
+Author: Poly by Google
+Source: https://poly.pizza/m/e5jmUgocmaT
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+AVCS8jUd2l.glb — Big Building
+Author: Quaternius
+Source: https://poly.pizza/m/AVCS8jUd2l
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+GoF3zph6WI.glb — Business Building
+Author: Quaternius
+Source: https://poly.pizza/m/GoF3zph6WI
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+T3oyvK6VEU.glb — Building
+Author: Kay Lousberg
+Source: https://poly.pizza/m/T3oyvK6VEU
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+ppwtREejXg.glb — Large Building
+Author: Kenney
+Source: https://poly.pizza/m/ppwtREejXg
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+obYD8hWLTZ.glb — Skyscraper
+Author: Kenney
+Source: https://poly.pizza/m/obYD8hWLTZ
+License: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.
+
+01lqee-dZAr.glb — Apartment building
+Author: Poly by Google
+Source: https://poly.pizza/m/01lqee-dZAr
+License: CC BY 4.0 — https://creativecommons.org/licenses/by/4.0/
+Changes: Normalized scale/orientation; meshopt compression and WebP texture optimisation where applicable; material tweaks for the game.

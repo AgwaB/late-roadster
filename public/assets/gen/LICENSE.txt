@@ -1,0 +1,52 @@
+Late Roadster — generated and assembled assets
+
+License: CC0 1.0 Universal
+https://creativecommons.org/publicdomain/zero/1.0/
+Late Roadster dedicates its rights in its own Blender work, renders, generated
+source images and derived textures to CC0, to the extent such rights exist.
+Source images are generated project artwork, not photographs of real locations
+or third-party car imagery. This is not a license for the game code, nor a
+relicensing of separately attributed CC BY models in ../pp/.
+
+Own procedural Blender work:
+- bldg_1.glb through bldg_8.glb: commercial buildings; tools/blender/building.py.
+- photo_a1.glb through photo_a14.glb and photo_t1.glb through photo_t6.glb:
+  facade slabs; tools/blender/photo_building.py. Generated elevations and roof
+  images are bound from ../photo/; ambientCG cladding is documented in ../tex/.
+- tree_big.webp, tree_small.webp: tree billboards rendered with
+  tools/blender/tree_billboard.py.
+
+Round-3 Blender work from generated reference images:
+- roadster_r3.glb: silver roadster; tools/blender/r3/roadster.py.
+- dumpster_r3.glb, container_r3_red.glb, container_r3_blue.glb,
+  scooter_r3.glb: street props.
+- toll_booth_r3.glb, bridge_lamp_r3.glb, bridge_parapet_r3.glb: toll/bridge kit;
+  tools/blender/r3/toll_bridge.py (toll_canopy_r3.glb was dropped on 2026-10-18:
+  the plaza canopy is built in code now).
+- cz_barrier.glb, cz_sign.glb, cz_arrowboard.glb, cz_excavator.glb:
+  construction kit; tools/blender/r3/construction.py.
+- hq_r3.glb: ONTIME HOLDINGS headquarters; tools/blender/r3/hq.py.
+- villa_r3.glb: MAPLE VILLA; tools/blender/r3/villa.py.
+Additional street-prop scripts are under tools/blender/r3/.
+Reference images: research/raycity/generated/2026-10-17-round3/.
+Prompts: research/raycity/IMAGE_PROMPTS_ROUND3.md.
+External O/HM/BR/CZ and other generated textures: ../photo/LICENSE.txt.
+
+Round-4 Blender work from generated reference images (loaded as raw glTF scenes):
+- booster_r4.glb, booster_leg_r4.glb: landing booster and its leg; tools/blender/r4/booster.py.
+- cart_r4.glb: jet-assist shopping cart; tools/blender/r4/cart.py.
+Reference images: research/raycity/generated/2026-10-18-round4/ (prompts: IMAGE_PROMPTS_ROUND4.md).
+
+Poly Haven-derived assemblies (not wholly original meshes):
+- euro_1.glb through euro_6.glb: assembled by Late Roadster with
+  tools/blender/euro_building.py from Poly Haven's modular_urban_apartments_facade.
+  Original kit: https://polyhaven.com/a/modular_urban_apartments_facade
+  Original license: CC0 1.0 — https://creativecommons.org/publicdomain/zero/1.0/
+  Changes: kit parts arranged/scaled into apartment blocks and exported to GLB;
+  facade texture/material binding for the game. See ../ph/LICENSE.txt for maps.
+
+Export processing: tools/optimize_glb.mjs and tools/optimize_assets.sh apply
+meshopt compression and texture resizing/WebP optimisation where applicable.
+Runtime model normalization, material binding/tweaks and selected mesh omission
+are performed in src/render/assets.ts using src/render/manifest.ts metadata.
+CC0 attribution is supplied for provenance, not because CC0 requires it.

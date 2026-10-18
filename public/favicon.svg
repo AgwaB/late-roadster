@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0B0F22"/>
+  <!-- the roadster upside down: wheels up, roof hanging down -->
+  <circle cx="19" cy="22" r="5.5" fill="#E6EBF5"/>
+  <circle cx="45" cy="22" r="5.5" fill="#E6EBF5"/>
+  <rect x="7" y="24" width="50" height="7" rx="2" fill="#E6EBF5"/>
+  <path fill="#E6EBF5" d="M16 31 L48 31 L41 40 L24 40 Z"/>
+  <circle cx="19" cy="22" r="2" fill="#0B0F22"/>
+  <circle cx="45" cy="22" r="2" fill="#0B0F22"/>
+  <!-- THIS SIDE UP -->
+  <path fill="#FFD23F" d="M32 43 L43 53 L37 53 L37 59 L27 59 L27 53 L21 53 Z"/>
+</svg>

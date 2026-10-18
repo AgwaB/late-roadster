@@ -1,0 +1,4 @@
+Textures: ambientCG (https://ambientcg.com) — CC0 1.0 (Facade001/002/003/005/006/009/010/012/018A/020A, Asphalt033, PavingStones138, Concrete034, Grass004, Tiles143, Tiles140, Bricks059; Asphalt033 colour map levels-adjusted, Tiles/Bricks pre-tiled 3x).
+HDRI: Poly Haven "kloofendal_48d_partly_cloudy_puresky" (https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky) — CC0 1.0. sky.hdr = 1k lighting probe, sky_bg.webp = 4k tonemapped background.
+Tree billboards (public/assets/gen/tree_*.webp): rendered in Blender by tools/blender/tree_billboard.py — CC0.
+CC0 1.0 license: https://creativecommons.org/publicdomain/zero/1.0/

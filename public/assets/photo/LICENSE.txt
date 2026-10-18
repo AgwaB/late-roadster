@@ -1,0 +1,28 @@
+Generated image textures made for Late Roadster (fictional English-language brands, no real places).
+Source renders: research/raycity/generated/<date>/ ; processed by tools/photo_textures.py.
+A_* facades (12x16 m), B_* upper-floor modules (12x12 m, 3 floors), C_* shopfront strips (12x5 m),
+D_* keyed skylines (webp, sky -> alpha), E_* rooftop adverts, F_* roofs, G_* noise walls.
+Round 2: A2_* facades (12x16 m), H_* blank side walls (12x16 m), I_* tower modules (12x12 m, 3 floors),
+J_* barrier blocks (2.1 m, tiling), K_* pedestrian cut-outs (webp, background -> alpha), L_* shelter posters.
+Round 3: source images in research/raycity/generated/2026-10-17-round3/ (generated, not location photography).
+- O_01/O_03/O_04: ONTIME HOLDINGS facade/side/car-park textures; tools/blender/r3/hq.py.
+- HM_01/HM_02: MAPLE VILLA facade/interior textures; tools/blender/r3/villa.py.
+- BR_02/BR_04: bridge steel/concrete tiling textures; tools/blender/r3/toll_bridge.py.
+- S_02..S_07 and K2_01..K2_03: scooter riders and late commuters, alpha-keyed/defringed/ground-cropped by tools/r3_cutouts.py.
+- TN_01: tunnel portal, dark mouth keyed to alpha; tools/r3_textures.py.
+- MS_01..MS_06: fictional meme sign faces; tools/r3_textures.py.
+- R08S: underside panel with enlarged THIS SIDE UP sticker, derived from R_08; tools/r3_textures.py.
+- R_06W: circular wheel-face cutout derived from R_06; tools/r3_textures.py.
+- CZ_05: construction mesh/fence texture, cropped and tiled by tools/blender/r3/construction.py.
+Images are resized/cropped as needed and encoded as WebP; alpha is retained for cutouts.
+
+Round 4: source images in research/raycity/generated/2026-10-18-round4/; prompts: research/raycity/IMAGE_PROMPTS_ROUND4.md.
+- TC_01: tunnel ceiling; TW_01: tunnel wall; MT_01: ORBIT MART frontage; CR_01: cargo-crate surfaces
+  (tiling/opaque processing: tools/r4_textures_tiles.py).
+- WR_01/WR_02: wall-impact damage decals; PH_01: sinkhole apron; LP_01: landing pad
+  (alpha/decal processing: tools/r4_textures_alpha.py).
+- KA_01, KA_01_sm: key art behind the lobby and the result card.
+
+Late Roadster releases its rights in these generated images and processed textures under CC0 1.0, to the extent such rights exist.
+License: https://creativecommons.org/publicdomain/zero/1.0/
+This dedication does not relicense any third-party models or imply a warranty about trademark rights.

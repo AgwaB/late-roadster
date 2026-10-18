@@ -1,0 +1,37 @@
+Poly Haven CC0 asset inventory — Late Roadster
+
+Provider/source: Poly Haven — https://polyhaven.com/
+License for every GLB and facade map listed below: CC0 1.0 Universal
+https://creativecommons.org/publicdomain/zero/1.0/
+Provider license information: https://polyhaven.com/license
+
+Models: none shipped. The Poly Haven street-prop GLBs that used to live here (street lamps, hydrant,
+trash can, utility boxes, road barrier, seating, manhole, fire escape, roller shutter, electricity
+poles, old tyre, planter, trash bag, security light, modular_urban_apartments_facade.glb) were never
+loaded by the game and were removed from the shipped files on 2026-10-18; they remain in the git
+history. The facade kit survives as the assembled ../gen/euro_*.glb blocks (see ../gen/LICENSE.txt)
+and the texture maps below.
+
+External texture maps from the modular_urban_apartments_facade kit:
+Source: https://polyhaven.com/a/modular_urban_apartments_facade
+facade/modular_urban_apartments_facade_objects_arm.webp
+facade/modular_urban_apartments_facade_objects_diff.webp
+facade/modular_urban_apartments_facade_objects_nor_gl.webp
+facade/modular_urban_apartments_facade_plaster_arm.webp
+facade/modular_urban_apartments_facade_plaster_diff.webp
+facade/modular_urban_apartments_facade_plaster_nor_gl.webp
+facade/modular_urban_apartments_facade_trim_01_arm.webp
+facade/modular_urban_apartments_facade_trim_01_diff.webp
+facade/modular_urban_apartments_facade_trim_01_nor_gl.webp
+facade/modular_urban_apartments_facade_trim_02_arm.webp
+facade/modular_urban_apartments_facade_trim_02_diff.webp
+facade/modular_urban_apartments_facade_trim_02_nor_gl.webp
+diff = diffuse colour; nor_gl = OpenGL normal; arm = packed ambient occlusion/roughness/metallic.
+
+Changes: exported/converted to GLB for the game, meshopt optimisation and embedded
+texture resizing/WebP conversion where applicable; external facade maps converted
+to WebP. In-game placement, scale and material adjustments may differ from the originals.
+The euro_1..euro_6 assemblies derived from this kit are in ../gen/ (see its LICENSE.txt).
+
+These notices record provenance; CC0 does not require attribution.
+The separate Poly Haven sky in ../tex/ is documented in ../tex/LICENSE.txt.
