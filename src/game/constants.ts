@@ -23,12 +23,17 @@ export const TOLL_X = -520; // FLYERS TOLL $0 gate across y = 0
 export const TUNNEL_HALF_X = 170; // stays clear of the bank-road intersections at x = ±P
 export const CEIL_H = 6.5;
 export const CEIL_RISE = 0.6; // s of the jet-powered rise to the tunnel ceiling (roll over in the second half)
-// elevated expressway ("skyway") over the y = 0 arterial east of the river tunnel; E climbs on / drops off
+// elevated expressway ("skyway") over the y = 0 arterial east of the river tunnel: a ramp at each end climbs from
+// the inner lane up to the deck (and back down), one lane each way
 export const SKY_H = 11; // deck surface height (m)
 export const SKY_HALF = 8; // half width incl. parapets: covers the two inner lanes each way
 export const SKY_X0 = 240;
 export const SKY_X1 = 760;
-export const SKY_SHIFT = 0.9; // s for the scripted thruster climb up / drop down
+// each end ramp: from the road at SKY_X0 up to the deck SKY_RAMP m on (an S-curve, ~13 % at its steepest), ending
+// short of the zebra crossing before the x = 400 / 600 junctions; over the inner lane only (lane 1 runs beside it)
+export const SKY_RAMP = 128;
+export const SKY_RAMP_HALF = 4.9; // half width incl. parapets
+export const SKY_TAPER = 30; // m over which the deck widens from the ramp to its full width
 export const COMMUTE_MIN = 2800; // road distance home -> office (m)
 export const COMMUTE_MAX = 3400;
 
@@ -68,9 +73,17 @@ export const THRUST_ACC = 30; // m/s² net push while the jets catch up to the t
 export const TAP_MAX = 0.18; // s: an in-air press released sooner is a flip tap, held longer it is flight
 export const LAUNCH_HOLD = 0.12; // s the launch press must stay down before the jets take over (a tap = the hop)
 // flight fuel (the FUEL gauge, 0..1): a full tank is FUEL_FLY_S s of jet flight; it refills while on the ground
-export const FUEL_FLY_S = 5;
+export const FUEL_FLY_S = 2.5;
 export const FUEL_REFILL = 1 / 12; // per second on the ground (12 s from empty to full)
 export const FLY_SINK = 2.5; // m/s descent once the tank is empty (still holding)
+// Down off the event ramp's lip, as in the reveal: the cold-gas jets right the car and brake the fall, so it settles
+// onto its wheels instead of dropping 23 m. The allowed sink rate shrinks with height (DROP_TOUCH_V + DROP_K x height),
+// so it falls freely at first, then hangs on its jets and touches down at DROP_TOUCH_V.
+export const DROP_TOUCH_V = 3; // m/s sink at touchdown
+export const DROP_K = 1.1; // 1/s: the allowed sink per metre of height
+export const DROP_ACC = 34; // m/s² the jets can brake the fall by
+export const DROP_ROLL_S = 0.9; // s to roll upright again (the side jets), instead of a flick
+export const DROP_DRAG = 1.2; // 1/s: the jets also take out most of the speed back over the run-in
 export const TWIST_ANGLE = (45 * Math.PI) / 180; // rotation axis tilted between pitch (flip) and roll: off-axis twist
 export const FLIP_RATE = (360 * Math.PI) / 180; // slowest rotation: one full turn per second, as in the demo
 export const FLIP_RATE_MAX = (900 * Math.PI) / 180; // fastest, for late presses
@@ -79,7 +92,6 @@ export const FLIP_MIN_AIR = 0.45; // s of airtime needed to start a rotation at 
 export const FLIP_MAX = 2; // rotations per jump
 export const LAND_TOL = (45 * Math.PI) / 180;
 export const GRAVITY = 20;
-export const WALL_CRASH_V = 14; // m/s into a wall/building (normal component) = crash; below = scrape
 
 // ---- SP (skill points): regenerates, spent by skills. Raycity-style.
 export const SP_MAX = 100;

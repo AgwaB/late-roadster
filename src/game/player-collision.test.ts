@@ -220,7 +220,7 @@ describe("#16 whole-body walls and hazards", () => {
     },
   );
 
-  it("wirepole hazard at the player's middle now impacts", () => {
+  it("wirepole hazard at the player's middle now impacts, and the car is pushed out of it (not driven through)", () => {
     const s = emptySession();
     s.hazards = [
       {
@@ -240,7 +240,10 @@ describe("#16 whole-body walls and hazards", () => {
         hit: false,
       },
     ];
-    expect(s["collideHazards"](true)).toEqual(["bump:pole"]);
+    const ev = s["collideHazards"](true);
+    expect(ev).toHaveLength(1);
+    expect(ev[0]).toMatch(/^(scrape|hit:pole)$/);
+    expect(s["collideHazards"](true)).toEqual([]); // clear of it now
   });
 });
 
@@ -260,6 +263,29 @@ describe("N1 building heights", () => {
     expect([s.car.x, s.car.y]).not.toEqual([b.cx, b.cy]);
   });
 
+  it("driving flat out into a building is a bounce, never a wipe-out", () => {
+    const s = emptySession();
+    s.layout.buildings = [
+      {
+        box: box(s.car.x + 12, s.car.y, 3, 6),
+        cx: s.car.x + 12,
+        cy: s.car.y,
+        height: 20,
+        kind: "test",
+        scale: 1,
+        rotY: 0,
+      },
+    ];
+    Object.assign(s.car, { v: 45, invuln: 0 });
+    const ev: string[] = [];
+    for (let i = 0; i < 120; i++)
+      ev.push(...s.step(DT, { ...NO_INPUT, accel: true }));
+    expect(ev).toContain("hit:building");
+    expect(ev.some((e) => e.startsWith("crash:"))).toBe(false);
+    expect(s.car.state).toBe("drive");
+    expect(s.car.v).toBeLessThan(10);
+  });
+
   it("a rotated body extending below a roof still collides, using layout buildings", () => {
     const s = emptySession();
     s.layout.buildings = [
@@ -275,7 +301,7 @@ describe("N1 building heights", () => {
     ];
     Object.assign(s.car, { h: 3.2, pitch: Math.PI / 2, grounded: false });
     expect(carSpan(s.car).bottom).toBeLessThan(3);
-    expect(s["collideStatic"](false)).toContain("wall");
+    expect(s["collideStatic"](false)).toContain("scrape");
   });
 });
 
@@ -312,7 +338,7 @@ describe("#6 bounded multi-contact resolution", () => {
     expect(staticPass.mock.calls.length).toBeGreaterThan(1);
     expect(staticPass.mock.calls.length).toBeLessThanOrEqual(4);
     expect(events.filter((e) => /^(hit|bump):/.test(e))).toHaveLength(1);
-    expect(events.filter((e) => e === "wall").length).toBeLessThanOrEqual(1);
+    expect(events.filter((e) => e === "scrape").length).toBeLessThanOrEqual(1);
     expect(s["poseBlocked"](s.car)).toBe(false);
   });
 

@@ -67,14 +67,18 @@ describe("visual-meme city data", () => {
           s.what === "ramp" && inBox(s.box, wall.x, wall.y) && s.top > RAMP_TOP,
       ),
     ).toBe(true);
-    // the run-in line and the ramp approach stay clear of the grandstands, poles and the row
+    // the run-in line and the ramp approach stay clear of the grandstands, poles and the row (the ramp's upper arm
+    // overhangs the approach ~17 m up: not in the way on the floor)
+    const low = (o: { bottom: number }) => o.bottom < 2;
     for (let s = 0; s < st.rowS - ROW_HALF - 1; s += 2) {
       const q = stageAt(st, s);
       expect(city.solids.some((o) => inBox(o.box, q.x, q.y))).toBe(false);
     }
     for (let u = -80; u < 1; u += 2) {
       const q = rampWorld(st.ramp, u, 0);
-      expect(city.solids.some((o) => inBox(o.box, q.x, q.y))).toBe(false);
+      expect(city.solids.some((o) => low(o) && inBox(o.box, q.x, q.y))).toBe(
+        false,
+      );
       expect(city.props.some((o) => inBox(o.box, q.x, q.y))).toBe(false);
     }
   });
@@ -108,7 +112,8 @@ describe("visual-meme city data", () => {
     expect(fast.rode).toBe(true);
     expect(fast.ev).toContain("wall");
     expect(fast.ev).toContain("flipStart");
-    expect(fast.peak).toBeGreaterThan(RAMP_TOP - 1);
+    // all the way round the top of the C: hanging upside down under the upper arm
+    expect(fast.peak).toBeGreaterThan(RAMP_TOP - C.CAR_H - 0.5);
     expect(fast.ev.some((e) => e.startsWith("crash:"))).toBe(false);
     expect(fast.ev).toContain("flip:1");
     expect(fast.c.state).toBe("drive");
@@ -119,6 +124,67 @@ describe("visual-meme city data", () => {
     expect(
       Math.cos(fast.c.heading - Math.atan2(st.ramp.uy, st.ramp.ux)),
     ).toBeLessThan(-0.9);
+    // down off the lip, as in the reveal: upright again in about a second, then the jets hold it up and it
+    // settles onto its wheels at walking pace instead of dropping 23 m
+    {
+      const start = rampWorld(st.ramp, -30, 0);
+      const c = newCar(start.x, start.y, Math.atan2(st.ramp.uy, st.ramp.ux));
+      c.h = C.CURB_H;
+      c.v = C.BASE_SPEED;
+      let top = -1,
+        retro = 0,
+        upright = -1,
+        sink = 0,
+        lastVH = 0;
+      const ev: string[] = [];
+      for (let i = 0; i < 60 * 10; i++) {
+        const t = i / 60;
+        const e = stepCar(c, { ...NO_INPUT, accel: top < 0 }, 1 / 60, env);
+        ev.push(...e);
+        if (e.includes("walltop")) top = t;
+        if (top < 0) continue;
+        if (c.grounded) break;
+        if (c.retro) retro += 1 / 60;
+        if (upright < 0 && c.roll === 0) upright = t - top;
+        sink = Math.min(sink, c.vH);
+        lastVH = c.vH;
+      }
+      expect(ev).toContain("retro");
+      expect(upright).toBeGreaterThan(0.6); // a steady roll on the side jets, not a flick
+      expect(upright).toBeLessThan(1.2);
+      expect(retro).toBeGreaterThan(1); // hangs on the jets for a good while
+      expect(sink).toBeGreaterThan(-20); // never the full 23 m free fall (~30 m/s)
+      expect(lastVH).toBeGreaterThan(-4); // touches down gently
+      expect(ev).toContain("land:clean");
+      expect(c.rampDrop).toBe(false);
+      expect(c.retro).toBe(false);
+    }
+    // over the lip, Space again: one more flip on the way down, two in one jump, still landing upright
+    {
+      const start = rampWorld(st.ramp, -30, 0);
+      const c = newCar(start.x, start.y, Math.atan2(st.ramp.uy, st.ramp.ux));
+      c.h = C.CURB_H;
+      c.v = C.BASE_SPEED;
+      const ev: string[] = [];
+      let topAt = -1;
+      for (let i = 0; i < 60 * 8; i++) {
+        const t = i / 60;
+        const press = topAt >= 0 && t > topAt + 0.15 && t < topAt + 0.2;
+        const e = stepCar(
+          c,
+          { ...NO_INPUT, accel: true, jump: press },
+          1 / 60,
+          env,
+        );
+        if (topAt < 0 && e.includes("walltop")) topAt = t;
+        ev.push(...e);
+        if (topAt >= 0 && c.grounded) break;
+      }
+      expect(ev.filter((e) => e === "flipStart")).toHaveLength(2);
+      expect(ev).toContain("flip:2");
+      expect(ev).toContain("land:clean");
+      expect(c.state).toBe("drive");
+    }
     // too slow to reach the lip: it rolls back down the curve and off the foot, no crash
     const slow = run(22, -6);
     expect(slow.rode).toBe(true);
@@ -167,7 +233,7 @@ describe("visual-meme city data", () => {
     expect(groundAt(city, mid.x, mid.y, 0).h).toBe(0);
     // no sinkholes hidden under the queue
     expect(city.potholes.some((p) => p.edge === tl.edge)).toBe(false);
-    // flying into the canopy edge at speed is a crash; skimming over the roof is not
+    // flying into the canopy edge at speed is a hard hit (a bounce, never a wipe-out); skimming over the roof is clean
     const s = new Session(city, 1, 0, 0);
     const c = s.car;
     c.x = tl.x - PLAZA.canopyHalfX - 6;
@@ -177,14 +243,14 @@ describe("visual-meme city data", () => {
     c.h = PLAZA.bottom + 0.2;
     c.grounded = false;
     c.invuln = 0;
-    let crash: string | undefined;
-    for (let i = 0; i < 60 && !crash; i++) {
+    const ev1: string[] = [];
+    for (let i = 0; i < 60; i++) {
       c.vH = 0;
-      crash = s
-        .step(1 / 60, { ...NO_INPUT, accel: true, jump: true })
-        .find((e) => e.startsWith("crash:"));
+      ev1.push(...s.step(1 / 60, { ...NO_INPUT, accel: true, jump: true }));
     }
-    expect(crash).toBe("crash:toll");
+    expect(ev1).toContain("hit:toll");
+    expect(ev1.some((e) => e.startsWith("crash:"))).toBe(false);
+    expect(c.state).toBe("drive");
     const s2 = new Session(city, 1, 0, 0);
     const c2 = s2.car;
     Object.assign(c2, {

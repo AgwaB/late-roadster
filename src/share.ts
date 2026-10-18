@@ -4,6 +4,11 @@
 
 const PRE = 4.5; // seconds before the moment
 const POST = 4.0; // seconds after
+/** the recorded copy: at most this wide (never wider than the game canvas itself), at most this many frames/s */
+const MIRROR_W = 960;
+const MIRROR_FPS = 30;
+/** a run's recording stops by itself after this long (s of recorded time): it is all kept in memory */
+const MAX_RECORD_S = 240;
 
 function pickMime(): string | null {
   if (typeof MediaRecorder === "undefined") return null;
@@ -34,7 +39,11 @@ export class ClipRecorder {
   /** Downscaled copy of the WebGL canvas that is actually recorded: a full-res WebGL readback every frame stalls the GPU. */
   private mirror: HTMLCanvasElement;
   private mirrorCtx: CanvasRenderingContext2D | null;
-  private frameParity = 0;
+  /** performance.now() of the last frame copied into the mirror */
+  private lastCopy = -Infinity;
+  /** ms spent paused (credits up), and when the current pause began (null: recording) */
+  private pausedMs = 0;
+  private pausedAt: number | null = null;
 
   constructor(private canvas: HTMLCanvasElement) {
     this.mime = pickMime();
@@ -47,15 +56,29 @@ export class ClipRecorder {
         .captureStream === "function";
   }
 
-  /** Call once per rendered frame (after the WebGL render): copies every other frame into the recorded mirror canvas. */
+  /** the recorded size: MIRROR_W wide at most, and never upscaled from a smaller (low-quality / phone) canvas */
+  private mirrorSize(): { W: number; H: number } {
+    const W = Math.max(2, Math.min(MIRROR_W, this.canvas.width));
+    return {
+      W,
+      H: Math.max(2, Math.round((W * this.canvas.height) / this.canvas.width)),
+    };
+  }
+
+  /**
+   * Call once per rendered frame (after the WebGL render): copies a frame into the recorded mirror canvas at most
+   * MIRROR_FPS times a second, whatever the display's refresh rate.
+   */
   capture(): void {
     if (!this.rec || this.rec.state !== "recording" || !this.mirrorCtx) return;
-    if ((this.frameParity ^= 1) === 0) return;
-    const W = 960,
-      H = Math.max(
-        2,
-        Math.round((960 * this.canvas.height) / this.canvas.width),
-      );
+    if (this.elapsed > MAX_RECORD_S) {
+      void this.stop();
+      return;
+    }
+    const now = performance.now();
+    if (now - this.lastCopy < 1000 / MIRROR_FPS - 2) return;
+    this.lastCopy = now;
+    const { W, H } = this.mirrorSize();
     if (this.mirror.width !== W || this.mirror.height !== H) {
       this.mirror.width = W;
       this.mirror.height = H;
@@ -74,11 +97,7 @@ export class ClipRecorder {
     let stream: MediaStream | null = null;
     let ready = false;
     try {
-      const W = 960,
-        H = Math.max(
-          2,
-          Math.round((960 * this.canvas.height) / this.canvas.width),
-        );
+      const { W, H } = this.mirrorSize();
       this.mirror.width = W;
       this.mirror.height = H;
       stream = this.mirror.captureStream(30);
@@ -94,7 +113,7 @@ export class ClipRecorder {
           if (finished) return;
           finished = true;
           clearTimeout(this.stopTimer);
-          this.stoppedElapsed ??= (performance.now() - this.startedAt) / 1000;
+          this.stoppedElapsed ??= this.liveElapsed();
           try {
             this.blob = ok
               ? new Blob(chunks, { type: rec.mimeType || this.mime! })
@@ -115,6 +134,9 @@ export class ClipRecorder {
       rec.onstop = () => this.finishRun?.(true);
       rec.onerror = () => this.finishRun?.(false);
       this.startedAt = performance.now();
+      this.pausedMs = 0;
+      this.pausedAt = null;
+      this.lastCopy = -Infinity;
       this.stoppedElapsed = null;
       rec.start(1000);
       this.available = ready = true;
@@ -130,9 +152,30 @@ export class ClipRecorder {
     }
   }
 
+  /**
+   * Pause / resume with the game (the credits stop the run): nothing is recorded meanwhile, and the paused time is
+   * not part of the media timeline (elapsed) either.
+   */
+  setPaused(p: boolean): void {
+    const rec = this.rec;
+    if (!rec || p === (this.pausedAt !== null)) return;
+    try {
+      if (p && rec.state === "recording") {
+        rec.pause();
+        this.pausedAt = performance.now();
+      } else if (!p && rec.state === "paused") {
+        rec.resume();
+        this.pausedMs += performance.now() - (this.pausedAt ?? 0);
+        this.pausedAt = null;
+      }
+    } catch {
+      this.finishRun?.(false);
+    }
+  }
+
   /** Stop recording (call at the result). Resolves when the full blob is ready. */
   stop(): Promise<void> {
-    this.stoppedElapsed ??= (performance.now() - this.startedAt) / 1000;
+    this.stoppedElapsed ??= this.liveElapsed();
     if (this.rec && this.rec.state !== "inactive") {
       try {
         this.stopTimer = setTimeout(() => this.finishRun?.(false), 5000);
@@ -151,11 +194,20 @@ export class ClipRecorder {
     this.blob = null;
     this.available = false;
     this.stoppedElapsed = 0;
+    this.pausedAt = null;
+    this.pausedMs = 0;
   }
 
-  /** Wall-clock media time, frozen at stop; simulation can deliberately drop debt. */
+  /** Wall-clock media time (pauses left out), frozen at stop; simulation can deliberately drop debt. */
   get elapsed(): number {
-    return this.stoppedElapsed ?? (performance.now() - this.startedAt) / 1000;
+    return this.stoppedElapsed ?? this.liveElapsed();
+  }
+
+  private liveElapsed(): number {
+    const now = performance.now();
+    const paused =
+      this.pausedMs + (this.pausedAt !== null ? now - this.pausedAt : 0);
+    return (now - this.startedAt - paused) / 1000;
   }
 
   /**

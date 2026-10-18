@@ -1,7 +1,8 @@
-// DOM HUD: clock, gauges, compass arrow, BREAKING band, flash labels, minimap, result card, loading/title, touch buttons.
+// DOM HUD: clock, gauges, compass arrow, WIPEOUT band, BREAKING NEWS card, minimap, result card, touch buttons.
 import * as C from "../game/constants";
 import { type City, shortestPath } from "../game/city";
-import { CLIPS, clipSpots, viewsText } from "../game/score";
+import { CLIPS, clipSpots, hintSpots, viewsText } from "../game/score";
+import { forInput } from "./keys";
 import type { Result, Session } from "../game/session";
 import type { InputState } from "../input";
 import { CREDITS } from "../render/manifest";
@@ -24,43 +25,57 @@ function setText(node: HTMLElement, value: string): void {
 }
 
 /** BREAKING headline per crash reason (src/game/session.ts crash events). */
-const HEADLINES: Record<string, string> = {
-  land: "ROADSTER LANDS ON ITS ROOF",
-  sinkhole: "ROADSTER SWALLOWED BY SINKHOLE",
-  skycar: "MID-AIR COLLISION OVER THE CORRIDOR",
-  toll: "ROADSTER FLIES INTO TOLL PLAZA",
-  sign: "ROADSTER PARKS IN OVERHEAD SIGN",
-  building: "ROADSTER ENTERS BUILDING THE HARD WAY",
-  wall: "ROADSTER MEETS WALL",
-  pier: "ROADSTER HITS SKYWAY PILLAR",
-  parapet: "ROADSTER CLIPS SKYWAY RAIL",
-  ramp: "ROADSTER MISSES THE RAMP",
-  pole: "ROADSTER HUGS A POLE",
-  splash: "ROADSTER TAKES A SWIM",
-  scooter: "ROADSTER VS SCOOTER",
-  cyclist: "ROADSTER MEETS THE CYCLING CLUB",
+// The only accidents left: the river, a sinkhole, a flying roadster in the sky lane (src/game/session.ts). A wipeout
+// is not news: the band says WIPEOUT and the cause; the news card is for the city's other roadsters (main.ts).
+const CAUSES: Record<string, string> = {
+  sinkhole: "SWALLOWED BY A SINKHOLE",
+  skycar: "MID-AIR COLLISION",
+  splash: "TOOK A SWIM",
 };
 /** One-time tip per crash reason: what to do differently. */
 const TIPS: Record<string, string> = {
-  land: "Finish the flip before you touch down: wheels first.",
   sinkhole: "Tap SPACE to hop a sinkhole, or steer around it.",
   skycar:
-    "Flying cars keep right like the road. Fly over the outer lanes or stay under 10 m.",
-  toll: "Climb early: the canopy roof is 7 m up. Or hop across the queue's roofs.",
-  sign: "Overhead signs are solid. Fly above them or stay on the road.",
+    "Flying cars keep right like the road. Fly over the outer lanes or stay under 8 m.",
   splash: "The river is deep. Take a bridge or the tunnel.",
-  ramp: "Hit the ramp straight and fast, at its foot.",
-  cyclist: "The bike pack is head-high: a tap of SPACE clears the lot of them.",
-  scooter: "Scooters weave. Hop them, or change lanes early.",
 };
-const WALL_TIP =
-  "Walls at speed are a crash. Brake (S) or drift (CTRL) into the turn.";
 
-function crashHeadline(reason: string): string {
-  return "BREAKING: " + (HEADLINES[reason] ?? "COMMUTER ROADSTER WIPES OUT");
+/** metres from a clip's beam within which its hint shows */
+const BEAM_HINT_R = 34;
+
+function crashCause(reason: string): string {
+  return CAUSES[reason] ?? "";
 }
 function crashTip(reason: string): string {
-  return TIPS[reason] ?? WALL_TIP;
+  return TIPS[reason] ?? "";
+}
+
+/** A save button: label, disabled while saving, SAVED / CLIP UNAVAILABLE after; a null handler hides it. */
+function wireSave(
+  btn: HTMLButtonElement,
+  handler: ((setLabel: (s: string) => void) => Promise<boolean>) | null,
+  label: string,
+): void {
+  btn.classList.toggle("hidden", !handler);
+  btn.textContent = label;
+  btn.disabled = false;
+  btn.onclick = handler
+    ? async () => {
+        const current = btn.onclick;
+        btn.disabled = true;
+        try {
+          const saved = await handler((s) => {
+            if (btn.onclick === current) setText(btn, s);
+          });
+          if (btn.onclick === current)
+            setText(btn, saved ? "SAVED" : "CLIP UNAVAILABLE");
+        } catch {
+          if (btn.onclick === current) setText(btn, "CLIP UNAVAILABLE");
+        } finally {
+          if (btn.onclick === current) btn.disabled = false;
+        }
+      }
+    : null;
 }
 
 export class Hud {
@@ -69,6 +84,10 @@ export class Hud {
   /** the credits dialog is up: the run should not advance */
   get paused(): boolean {
     return this.creditsOpen;
+  }
+  /** the result card is up (ESC / Q / LOBBY go through its LOBBY button, so it closes too) */
+  get resultShowing(): boolean {
+    return this.resultOpen;
   }
   private miniCssSize = 230;
   private miniObserver: ResizeObserver;
@@ -106,13 +125,19 @@ export class Hud {
   private miniScale = 1;
   private faceEl: HTMLCanvasElement;
   private faceT = 0;
-  private tickerEl: HTMLElement;
-  private tickerT = 0;
+  /** at a clip's beam: what to do there */
+  private hintEl: HTMLElement;
+  private hintId = "";
+  private newsEl: HTMLElement;
+  private newsImg: HTMLImageElement;
+  private newsHead: HTMLElement;
+  private newsT = 0;
 
   constructor(
     root: HTMLElement,
     private input: InputState,
-    touch: boolean,
+    /** a touch screen: hints name the on-screen buttons (src/ui/keys.ts) */
+    private touch: boolean,
   ) {
     this.clock = el("div", "clock", root, "8:58:30");
     const gauges = el("div", "gauges", root);
@@ -135,15 +160,30 @@ export class Hud {
     this.viewsPopEl = el("div", "vpop", vw);
     this.toastEl = el("div", "toast", root);
     this.band = el("div", "band", root);
-    el("span", "live", this.band, "● LIVE");
-    this.headline = el("span", "breaking", this.band, "BREAKING");
+    el("span", "wtitle", this.band, "WIPEOUT");
+    this.headline = el("span", "wcause", this.band, "");
+    this.cutSkipEl = el(
+      "div",
+      "cutskip",
+      root,
+      touch ? "JUMP  BACK TO THE CAR" : "SPACE  BACK TO THE CAR",
+    );
     this.crashInfo = el("div", "crashinfo", root);
     this.crashCount = el("div", "ccount", this.crashInfo);
     this.crashTipEl = el("div", "ctip", this.crashInfo);
     this.faceEl = el("canvas", "facecam", root);
     this.faceEl.width = 240;
     this.faceEl.height = 180;
-    this.tickerEl = el("div", "ticker", root);
+    this.hintEl = el("div", "beamhint", root);
+    // BREAKING NEWS: a small picture card top right, now and then, about the city's other roadsters
+    this.newsEl = el("div", "news", root);
+    const nf = el("div", "nframe", this.newsEl);
+    this.newsImg = el("img", "", nf);
+    this.newsImg.alt = "";
+    const nl = el("div", "nlabel", nf);
+    el("span", "nlive", nl, "● LIVE");
+    el("b", "", nl, "BREAKING NEWS");
+    this.newsHead = el("div", "nhead", this.newsEl);
     this.mini = el("canvas", "mini", root);
     this.miniObserver = new ResizeObserver(([entry]) => {
       this.miniCssSize = entry.contentRect.width || 230;
@@ -216,11 +256,17 @@ export class Hud {
     el("div", "rtitle", this.result, "LATE ROADSTER");
     this.resultGrade = el("div", "grade", this.result, "S");
     this.resultTime = el("div", "rtime", this.result, "+0:00");
-    this.resultCrash = el("div", "rcrash", this.result, "CRASH ×0");
+    this.resultCrash = el("div", "rcrash", this.result, "WIPEOUT ×0");
     this.resultPersona = el("div", "rpersona", this.result, "");
     this.resultViews = el("div", "rviews", this.result, "");
     this.resultCards = el("div", "rcards", this.result, "");
-    this.saveBtn = el("button", "next save hidden", this.result, "SAVE CLIP");
+    this.photoEl = el("div", "rphoto", this.result);
+    this.photoImg = el("img", "", this.photoEl);
+    this.photoImg.alt = "";
+    this.photoCap = el("b", "", this.photoEl);
+    const saves = el("div", "rbtns", this.result);
+    this.saveBtn = el("button", "next save hidden", saves, "SAVE CLIP");
+    this.bestBtn = el("button", "next save best hidden", saves, "SAVE BEST");
     const row = el("div", "rbtns", this.result);
     this.lobbyBtn = el("button", "next alt", row, "LOBBY");
     this.nextBtn = el("button", "next", row, "NEXT COMMUTE");
@@ -230,8 +276,11 @@ export class Hud {
 
   /** A crash: the cause as a news headline, the clock penalty, and (first time for this cause) what to do instead. */
   crash(reason: string, tip: boolean, free: boolean): void {
-    setText(this.headline, crashHeadline(reason));
-    setText(this.crashTipEl, tip ? "TIP  " + crashTip(reason) : "");
+    setText(this.headline, crashCause(reason));
+    setText(
+      this.crashTipEl,
+      tip ? "TIP  " + forInput(crashTip(reason), this.touch) : "",
+    );
     this.crashTipEl.classList.toggle("show", tip);
     if (!free) {
       this.penaltyEl.classList.remove("show");
@@ -254,15 +303,38 @@ export class Hud {
     this.viewsPopT = 1.4;
   }
 
+  private cutSkipEl: HTMLElement;
+  private bestBtn: HTMLButtonElement;
+  private photoEl: HTMLElement;
+  private photoImg: HTMLImageElement;
+  private photoCap: HTMLElement;
+
+  /** PHOTO FINISH: the arrival frame on the result card, captioned like a punched time card */
+  showPhoto(url: string, caption: string, late: boolean): void {
+    if (!this.resultOpen) return;
+    this.photoImg.src = url;
+    setText(this.photoCap, caption);
+    this.photoEl.classList.toggle("late", late);
+    this.photoEl.classList.add("show");
+  }
+  /** the rocket liftoff cut-away is on: say how to cut back to the car */
+  setCutaway(on: boolean): void {
+    this.cutSkipEl.classList.toggle("show", on && !this.resultOpen);
+  }
+
   /** A clip filmed for the first time: a small toast under the clock. */
   clipToast(id: string): void {
     const c = CLIPS.find((q) => q.id === id);
-    if (!c) return;
+    if (c) this.notice("NEW CLIP", c.title);
+  }
+
+  /** A small toast under the clock (a new clip, a full tank at CART RETURN, a parking ticket). */
+  notice(kicker: string, title: string, s = 2.6): void {
     this.toastEl.replaceChildren();
-    el("span", "", this.toastEl, "NEW CLIP");
-    el("b", "", this.toastEl, c.title);
+    el("span", "", this.toastEl, kicker);
+    el("b", "", this.toastEl, title);
     this.toastEl.classList.add("show");
-    this.toastT = 2.6;
+    this.toastT = s;
   }
 
   /** touch layouts have no Q / ESC: a small LOBBY button under the clock (main wires it) */
@@ -270,7 +342,8 @@ export class Hud {
 
   private buildTouch(root: HTMLElement, input: InputState): void {
     const lb = el("button", "lobby-btn", root, "LOBBY");
-    lb.onclick = () => this.onLobby?.();
+    lb.onclick = () =>
+      this.resultOpen ? this.lobbyBtn.click() : this.onLobby?.();
     const mk = (
       parent: HTMLElement,
       label: string,
@@ -368,14 +441,13 @@ export class Hud {
     this.faceT = 0.6;
   }
 
-  /** BREAKING ticker: a short icon line scrolling across the bottom. */
-  ticker(icons: string): void {
+  /** BREAKING NEWS card, top right: a picture and a one-line headline for ~6 s. */
+  news(img: string, headline: string): void {
     if (this.resultOpen) return;
-    setText(this.tickerEl, icons);
-    this.tickerEl.classList.remove("run");
-    void this.tickerEl.offsetWidth;
-    this.tickerEl.classList.add("run");
-    this.tickerT = 5;
+    if (this.newsImg.getAttribute("src") !== img) this.newsImg.src = img;
+    setText(this.newsHead, headline);
+    this.newsEl.classList.add("show");
+    this.newsT = 6;
   }
 
   update(s: Session, dt: number): void {
@@ -397,7 +469,7 @@ export class Hud {
         this.crashCount,
         "BACK IN " +
           Math.max(1, Math.ceil(C.CRASH_REPLAY - car.crashT)) +
-          "   SPACE  SKIP",
+          (this.touch ? "   JUMP  SKIP" : "   SPACE  SKIP"),
       );
     const v = viewsText(s.views);
     if (v !== this.lastViews) {
@@ -422,9 +494,37 @@ export class Hud {
       this.faceT -= dt;
       if (this.faceT <= 0) this.faceEl.classList.remove("show");
     }
-    if (this.tickerT > 0) {
-      this.tickerT -= dt;
-      if (this.tickerT <= 0) this.tickerEl.classList.remove("run");
+    if (this.newsT > 0) {
+      this.newsT -= dt;
+      if (this.newsT <= 0) this.newsEl.classList.remove("show");
+    }
+    // in a clip's beam (not filmed yet): say what to do right here
+    let at = "";
+    if (running && car.state === "drive") {
+      const known = s.tracker.known;
+      for (const p of this.hints)
+        if (
+          !known.has(p.id) &&
+          car.h >= p.minH &&
+          (p.x - car.x) ** 2 + (p.y - car.y) ** 2 < BEAM_HINT_R * BEAM_HINT_R
+        ) {
+          at = p.id;
+          break;
+        }
+    }
+    if (at !== this.hintId) {
+      this.hintId = at;
+      const c = CLIPS.find((q) => q.id === at);
+      if (c) {
+        this.hintEl.replaceChildren();
+        const hd = el("div", "bh-hd", this.hintEl);
+        const dot = el("i", "", hd);
+        dot.style.background = c.color ?? "#fff";
+        el("span", "", hd, "TO FILM");
+        el("b", "", hd, c.title);
+        el("div", "bh-how", this.hintEl, forInput(c.hint ?? c.how, this.touch));
+      }
+      this.hintEl.classList.toggle("show", !!c);
     }
     this.drawMini(s);
   }
@@ -433,32 +533,22 @@ export class Hud {
   setSaveClip(
     handler: ((setLabel: (s: string) => void) => Promise<boolean>) | null,
   ): void {
-    this.saveBtn.classList.toggle("hidden", !handler);
-    this.saveBtn.textContent = "SAVE CLIP";
-    this.saveBtn.disabled = false;
-    this.saveBtn.onclick = handler
-      ? async () => {
-          const current = this.saveBtn.onclick;
-          this.saveBtn.disabled = true;
-          try {
-            const saved = await handler((s) => {
-              if (this.saveBtn.onclick === current) setText(this.saveBtn, s);
-            });
-            if (this.saveBtn.onclick === current)
-              setText(this.saveBtn, saved ? "SAVED" : "CLIP UNAVAILABLE");
-          } catch {
-            if (this.saveBtn.onclick === current)
-              setText(this.saveBtn, "CLIP UNAVAILABLE");
-          } finally {
-            if (this.saveBtn.onclick === current) this.saveBtn.disabled = false;
-          }
-        }
-      : null;
+    wireSave(this.saveBtn, handler, "SAVE CLIP");
+  }
+
+  /** Wire the second save button, the run's best stunt (e.g. SAVE THE RAMP); null hides it. */
+  setSaveBest(
+    handler: ((setLabel: (s: string) => void) => Promise<boolean>) | null,
+    label = "",
+  ): void {
+    wireSave(this.bestBtn, handler, "SAVE " + label);
   }
 
   private clearGameplayOverlays(): void {
-    this.tickerT = this.faceT = 0;
-    this.tickerEl.classList.remove("run");
+    this.newsT = this.faceT = 0;
+    this.newsEl.classList.remove("show");
+    this.hintEl.classList.remove("show");
+    this.hintId = "";
     this.faceEl.classList.remove("show");
     this.band.classList.remove("show");
     this.crashInfo.classList.remove("show");
@@ -482,6 +572,12 @@ export class Hud {
       e.altKey
     )
       return;
+    // ESC / Q on the result card: its LOBBY button (the card closes; main.ts sees the event consumed)
+    if (e.code === "Escape" || e.code === "KeyQ") {
+      e.preventDefault();
+      this.lobbyBtn.click();
+      return;
+    }
     // Keep native Enter/Space activation for SAVE CLIP, NEXT and other buttons.
     if (
       e.code === "KeyN" ||
@@ -498,6 +594,7 @@ export class Hud {
 
   showResult(r: Result, onNext: () => void, onLobby: () => void): void {
     this.resultOpen = true;
+    this.photoEl.classList.remove("show");
     this.input.setGameplayEnabled(false);
     this.clearGameplayOverlays();
     this.resultGrade.textContent = r.grade;
@@ -506,7 +603,7 @@ export class Hud {
     this.resultTime.textContent = r.finished
       ? "+" + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
       : "9:00:00";
-    this.resultCrash.textContent = "CRASH ×" + r.crashes;
+    this.resultCrash.textContent = "WIPEOUT ×" + r.crashes;
     this.resultPersona.textContent = r.persona;
     this.resultViews.replaceChildren();
     el("b", "", this.resultViews, viewsText(r.finalViews) + " VIEWS");
@@ -597,7 +694,11 @@ export class Hud {
       ...p,
       color: CLIPS.find((c) => c.id === p.id)?.color ?? "#fff",
     }));
+    this.hints = hintSpots(city);
   }
+
+  /** where each clip's how-to shows (score.ts hintSpots) */
+  private hints: { id: string; x: number; y: number; minH: number }[] = [];
 
   /** where the clips not filmed yet are: coloured dots (clamped to the rim when off the map) */
   private spots: { id: string; x: number; y: number; color: string }[] = [];

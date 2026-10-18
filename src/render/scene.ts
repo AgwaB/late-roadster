@@ -6,7 +6,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
-import { N8AOPass } from "n8ao";
+import { QualityGovernor } from "./quality";
 
 export interface SceneKit {
   renderer: THREE.WebGLRenderer;
@@ -48,7 +48,9 @@ export function createScene(canvas: HTMLCanvasElement): SceneKit {
   scene.fog = new THREE.Fog("#D9E3DF", 220, 800);
   const camera = new THREE.PerspectiveCamera(53, 1, 0.5, 2600); // far enough for the rim skyline panels
 
-  const hemi = new THREE.HemisphereLight("#CCDDF1", "#786E50", 1.3);
+  /** hemisphere fill outdoors (setInterior dims it in the tunnel and the rain) */
+  const HEMI = 1.3;
+  const hemi = new THREE.HemisphereLight("#CCDDF1", "#786E50", HEMI);
   scene.add(hemi);
   const sun = new THREE.DirectionalLight("#FFF2D7", 2.6);
   // matches the sun in the HDRI (u 0.595, v 0.766): azimuth 34° from +x toward +z, elevation 48°
@@ -69,26 +71,17 @@ export function createScene(canvas: HTMLCanvasElement): SceneKit {
 
   let interior = 0;
   const composer = new EffectComposer(renderer);
-  // Beauty: N8AO (screen-space AO, half-res) renders the scene itself; the plain RenderPass is the fallback
-  // when AO is switched off by the adaptive quality ladder.
+  // Beauty: a plain RenderPass. Screen-space AO (N8AO) was dropped: measured with GPU timer queries on an M3 Pro at
+  // 1800x1125 it took ~7 ms of a ~14-15 ms frame even at its cheapest setting, which is what made the frame rate
+  // stutter between 60 and 30; the baked contact shadows and blob shadows carry the grounding instead.
   const renderPass = new RenderPass(scene, camera);
   composer.addPass(renderPass);
-  const ao = new N8AOPass(scene, camera, 1, 1);
-  ao.configuration.halfRes = true;
-  ao.configuration.aoRadius = 2.2;
-  ao.configuration.distanceFalloff = 0.6;
-  ao.configuration.intensity = 2.6;
-  ao.configuration.gammaCorrection = false;
-  ao.configuration.color = new THREE.Color(0x1c1a16);
-  ao.setQualityMode("Low");
-  composer.addPass(ao);
-  renderPass.enabled = quality !== "high";
-  ao.enabled = quality === "high";
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.18, 0.2, 0.995); // only clipped highlights (jet core, sun glints) bloom; sky/clouds stay matte
-  // half-resolution bloom targets: a soft glow does not need full-res blur chains
+  // quarter-resolution bloom targets: only clipped highlights bloom and the glow is soft, so the blur chain does not
+  // need more (half resolution cost ~2.7 ms per frame)
   const bloomSetSize = bloom.setSize.bind(bloom);
   bloom.setSize = (w: number, h: number) =>
-    bloomSetSize(Math.ceil(w / 2), Math.ceil(h / 2));
+    bloomSetSize(Math.ceil(w / 4), Math.ceil(h / 4));
   if (quality === "high") composer.addPass(bloom);
   composer.addPass(new OutputPass());
   // post-AA (the composer target has no MSAA): SMAA in display space
@@ -113,16 +106,11 @@ export function createScene(canvas: HTMLCanvasElement): SceneKit {
   window.addEventListener("resize", resize);
   resize();
 
-  // Adaptive quality: if frames stay slow, step down (pixel ratio -> bloom -> shadows) instead of lagging.
-  let ema = 16.7,
-    slowFor = 0,
-    fastFor = 0,
-    age = 0;
+  // Adaptive quality: if frames stay slow, step down (pixel ratio -> bloom -> shadows) instead of lagging; back up
+  // once they are steady again (the policy: src/render/quality.ts)
+  const governor = new QualityGovernor();
   const applyLevel = () => {
     bloom.enabled = quality === "high" && level < 2;
-    const aoOn = quality === "high" && level < 2;
-    ao.enabled = aoOn;
-    renderPass.enabled = !aoOn;
     const sh = quality === "high" && level < 3;
     if (renderer.shadowMap.enabled !== sh) {
       renderer.shadowMap.enabled = sh;
@@ -136,32 +124,19 @@ export function createScene(canvas: HTMLCanvasElement): SceneKit {
   };
   const adapt = (dt: number) => {
     if (displayDpr !== window.devicePixelRatio) resize();
-    age += dt;
-    if (age < 8) return; // load-time compile/upload hitches must not trigger a downgrade
-    const ms = Math.min(40, dt * 1000); // single hitches are capped; only sustained slowness moves the EMA
-    ema += (ms - ema) * 0.1;
-    if (ema > 22) {
-      slowFor += dt;
-      fastFor = 0;
-    } else if (ema < 13) {
-      fastFor += dt;
-      slowFor = 0;
-    } else {
-      slowFor = 0;
-      fastFor = 0;
-    }
-    if (slowFor > 2.5 && level < 3) {
-      level++;
-      slowFor = 0;
-      applyLevel();
-    } else if (fastFor > 20 && level > 0) {
-      level--;
-      fastFor = 0;
+    if (governor.step(dt)) {
+      level = governor.level;
       applyLevel();
     }
   };
 
   const pmrem = new THREE.PMREMGenerator(renderer);
+  if (import.meta.env.DEV)
+    // dev console: the post passes, for profiling (lr.kit.debug)
+    Object.defineProperty(window, "__kitDebug", {
+      value: { composer, renderPass, bloom, smaa, sun },
+      configurable: true,
+    });
   return {
     renderer,
     scene,
@@ -182,7 +157,7 @@ export function createScene(canvas: HTMLCanvasElement): SceneKit {
     /** 0 = outdoors, 1 = inside the tunnel: fill drops to ~30 % over a few frames (bible: 20-35 %, 0.3-0.6 s). */
     setInterior(k, dt) {
       interior += (k - interior) * Math.min(1, dt * 5);
-      hemi.intensity = 1.3 * (1 - 0.68 * interior);
+      hemi.intensity = HEMI * (1 - 0.68 * interior);
       sun.intensity = 2.6 * (1 - 0.5 * interior);
     },
     setSky(hdr, bg) {
@@ -195,8 +170,9 @@ export function createScene(canvas: HTMLCanvasElement): SceneKit {
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       const env = pmrem.fromEquirectangular(hdr).texture;
       scene.environment = env;
-      scene.environmentIntensity = 0.75; // IBL now supplies most of the ambient; the hemisphere light is only a fill
-      hemi.intensity = 0.45;
+      // the IBL adds the sky's colour and the reflections; the hemisphere fill stays at HEMI (the look was tuned
+      // with both: a 0.45 fill set here was overwritten every frame by setInterior, and never actually used)
+      scene.environmentIntensity = 0.75;
     },
   };
 }

@@ -86,6 +86,22 @@ export function martSite(city: City): {
   };
 }
 
+/**
+ * CART RETURN: a painted bay in the east half of ORBIT MART's forecourt, off the avenue across the sidewalk. Drive
+ * in once a run and the jet carts top up the FUEL tank.
+ */
+export function cartReturn(
+  site: NonNullable<ReturnType<typeof martSite>>,
+): AABB {
+  const front = site.south ? site.ey + 10 : site.ey - 10;
+  return {
+    x0: site.cx + 4,
+    x1: site.cx + 14,
+    y0: Math.min(site.ey, front),
+    y1: Math.max(site.ey, front),
+  };
+}
+
 function commuteRoute(city: City, commute: Commute): Node[] {
   return shortestPath(city, commute.home.id, commute.office.id);
 }

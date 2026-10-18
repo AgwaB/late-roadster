@@ -7,6 +7,7 @@ import type { Result, Session } from "../game/session";
 import { InputState } from "../input";
 import { Hud } from "./hud";
 import { Lobby } from "./lobby";
+import { forInput } from "./keys";
 
 beforeAll(() => {
   // jsdom has no layout, canvas or ResizeObserver: the HUD only needs them to draw
@@ -58,6 +59,9 @@ describe("lobby", () => {
     expect(lobby.root.inert).toBe(true);
     key("Space");
     expect(on.start).toHaveBeenCalledTimes(1);
+    // every stunt clip, no wipeout: FREE ROAM opens (nobody has to crash for it)
+    lobby.show(info(CLIPS.filter((c) => c.id !== "news").map((c) => c.id)));
+    expect(free.disabled).toBe(false);
     lobby.show(info(CLIPS.map((c) => c.id)));
     expect(lobby.root.inert).toBe(false);
     expect(free.disabled).toBe(false);
@@ -133,20 +137,55 @@ describe("hud", () => {
     expect(root.querySelector(".rviews")!.textContent).toContain("x0.5 LATE");
     root.querySelector<HTMLButtonElement>(".next.alt")!.click();
     expect(lobby).toHaveBeenCalledTimes(1);
+    // ESC / Q on the result card go through its LOBBY button: the card closes, and main.ts sees the key consumed
+    hud.showResult(r, next, lobby);
+    expect(hud.resultShowing).toBe(true);
+    const esc = key("Escape");
+    hud.handleResultKey(esc);
+    expect(esc.defaultPrevented).toBe(true);
+    expect(lobby).toHaveBeenCalledTimes(2);
+    expect(hud.resultShowing).toBe(false);
+    expect(root.querySelector(".result")!.classList.contains("hidden")).toBe(
+      true,
+    );
+    expect(root.querySelector(".rcrash")!.textContent).toBe("WIPEOUT ×1");
     root.remove();
   });
 
-  it("names the crash cause in the BREAKING band and shows a tip only when asked", () => {
+  it("names the on-screen buttons in hints and tips on a touch screen", () => {
+    const root = document.createElement("div");
+    document.body.append(root);
+    const hud = new Hud(root, new InputState(false), true);
+    hud.crash("sinkhole", true, false);
+    expect(root.querySelector(".ctip")!.textContent).toBe(
+      "TIP  Tap JUMP to hop a sinkhole, or steer around it.",
+    );
+    expect(forInput("Press E in the tunnel (SHIFT helps)", true)).toBe(
+      "Press STICK in the tunnel (BOOST helps)",
+    );
+    expect(forInput("Hold SPACE", false)).toBe("Hold SPACE");
+    root.remove();
+    const lroot = document.createElement("div");
+    document.body.append(lroot);
+    new Lobby(lroot, { start: vi.fn(), free: vi.fn() }, true);
+    const caps = Array.from(lroot.querySelectorAll("kbd")).map(
+      (k) => k.textContent,
+    );
+    expect(caps).toContain("JUMP");
+    expect(caps).not.toContain("SPACE");
+    lroot.remove();
+  });
+
+  it("a wipeout is not news: the band says WIPEOUT and the cause, with a tip only when asked", () => {
     const { root, hud } = make();
     hud.crash("sinkhole", true, false);
-    expect(root.querySelector(".breaking")!.textContent).toBe(
-      "BREAKING: ROADSTER SWALLOWED BY SINKHOLE",
+    expect(root.querySelector(".band")!.textContent).toBe(
+      "WIPEOUTSWALLOWED BY A SINKHOLE",
     );
+    expect(root.querySelector(".band")!.textContent).not.toContain("BREAKING");
     expect(root.querySelector(".ctip")!.classList.contains("show")).toBe(true);
     hud.crash("whatever", false, false);
-    expect(root.querySelector(".breaking")!.textContent).toBe(
-      "BREAKING: COMMUTER ROADSTER WIPES OUT",
-    );
+    expect(root.querySelector(".wcause")!.textContent).toBe("");
     expect(root.querySelector(".ctip")!.classList.contains("show")).toBe(false);
     // the counter and the band follow the session state each frame
     const fake = {
@@ -173,6 +212,49 @@ describe("hud", () => {
     expect(root.querySelector(".band")!.classList.contains("show")).toBe(true);
     expect(root.querySelector(".ccount")!.textContent).toContain("BACK IN 2");
     expect(root.querySelector(".views b")!.textContent).toBe("12.4K");
+    root.remove();
+  });
+
+  it("shows a BREAKING NEWS card with a picture for ~6 s, and never over the result card", () => {
+    const { root, hud } = make();
+    const card = root.querySelector(".news")!;
+    expect(card.classList.contains("show")).toBe(false);
+    hud.news(
+      "/assets/clips/hop.webp",
+      "FLIP PILE-UP: ROADSTER LANDS ON THE CAR AHEAD",
+    );
+    expect(card.classList.contains("show")).toBe(true);
+    expect(card.textContent).toContain("BREAKING NEWS");
+    expect(card.querySelector(".nhead")!.textContent).toBe(
+      "FLIP PILE-UP: ROADSTER LANDS ON THE CAR AHEAD",
+    );
+    expect(card.querySelector("img")!.getAttribute("src")).toBe(
+      "/assets/clips/hop.webp",
+    );
+    const fake = {
+      car: {
+        state: "drive",
+        crashT: 0,
+        fuel: 1,
+        sp: 100,
+        v: 0,
+        heading: 0,
+        x: 0,
+        y: 0,
+      },
+      clock: "8:59:00",
+      timeLeft: 30,
+      state: "run",
+      views: 0,
+      office: { x: 100, y: 0 },
+      distanceToOffice: 100,
+      traffic: { npcs: [] },
+      tracker: { known: new Set() },
+    } as unknown as Session;
+    for (let i = 0; i < 5.5 * 60; i++) hud.update(fake, 1 / 60);
+    expect(card.classList.contains("show")).toBe(true);
+    for (let i = 0; i < 60; i++) hud.update(fake, 1 / 60);
+    expect(card.classList.contains("show")).toBe(false);
     root.remove();
   });
 });

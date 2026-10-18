@@ -117,6 +117,32 @@ export function martSignTexture(): THREE.CanvasTexture {
   return tex(c);
 }
 
+/** ORBIT MART's CART RETURN bay, painted on the forecourt (and its little post sign): drive in, the tank fills. */
+export function cartReturnTexture(sign = false): THREE.CanvasTexture {
+  const [c, ctx] = canvas(512, 512);
+  ctx.clearRect(0, 0, 512, 512);
+  if (sign) {
+    // the post sign is opaque: dark ground under the yellow (the floor paint shows the forecourt through it)
+    ctx.fillStyle = "#15161a";
+    ctx.fillRect(0, 0, 512, 512);
+  }
+  ctx.strokeStyle = "#ffd23f";
+  ctx.lineWidth = 22;
+  ctx.strokeRect(14, 14, 484, 484);
+  ctx.fillStyle = "rgba(255,210,63,0.16)";
+  ctx.fillRect(25, 25, 462, 462);
+  ctx.fillStyle = "#ffd23f";
+  bold(ctx, 74);
+  ctx.fillText("CART", 256, 150);
+  ctx.fillText("RETURN", 256, 236);
+  bold(ctx, 46);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText("FREE TOP-UP", 256, 340);
+  bold(ctx, 34);
+  ctx.fillText("ONE PER COMMUTE", 256, 410);
+  return tex(c);
+}
+
 /** Yellow/black diagonal hazard stripes (island noses). */
 export function hazardStripeTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
@@ -142,18 +168,28 @@ export function hazardStripeTexture(): THREE.CanvasTexture {
 /**
  * Toll canopy fascia (one face, ~35 x 1 m): navy band, a TOLL panel over the median, a green down-arrow over each
  * lane coming in (right half, as the driver sees it) and a red cross over the other direction's lanes. lanes: lane
- * centre offsets from the median as a fraction of the fascia width.
+ * centre offsets from the median as a fraction of the fascia width. base: the round-5 TP_01 panel band (navy with
+ * white trims, tiling left-right), drawn under the signals instead of the flat band.
  */
-export function tollFasciaTexture(lanes: number[]): THREE.CanvasTexture {
+export function tollFasciaTexture(
+  lanes: number[],
+  base?: CanvasImageSource & { width: number; height: number },
+): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 2048;
   c.height = 64;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#14294d";
-  g.fillRect(0, 0, 2048, 64);
-  g.fillStyle = "#e8ebee";
-  g.fillRect(0, 0, 2048, 4);
-  g.fillRect(0, 60, 2048, 4);
+  if (base) {
+    // stretched 2x along the band so the panel seams fall ~2.5 m apart
+    const tw = Math.round((64 * base.width * 2) / base.height);
+    for (let x = 0; x < 2048; x += tw) g.drawImage(base, x, 0, tw, 64);
+  } else {
+    g.fillStyle = "#14294d";
+    g.fillRect(0, 0, 2048, 64);
+    g.fillStyle = "#e8ebee";
+    g.fillRect(0, 0, 2048, 4);
+    g.fillRect(0, 60, 2048, 4);
+  }
   const cx = 1024;
   g.fillStyle = "#ffffff";
   g.font = "900 40px system-ui, sans-serif";
@@ -193,6 +229,66 @@ export function tollFasciaTexture(lanes: number[]): THREE.CanvasTexture {
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   return t;
+}
+
+/**
+ * The event ground's big LED screen: black panel, a dotted red LED border, and a title card that changes every few
+ * seconds (THE RAMP / THE KICKFLIP / THIS SIDE UP, with a LIVE tag). draw(i) repaints card i.
+ */
+export function eventScreenTexture(): {
+  tex: THREE.CanvasTexture;
+  draw(i: number): void;
+} {
+  const c = document.createElement("canvas");
+  c.width = 640;
+  c.height = 352;
+  const g = c.getContext("2d")!;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  const cards = [
+    ["THE RAMP", "UP THE WALL. OVER THE TOP."],
+    ["THE KICKFLIP", "FIVE VEHICLES. ONE ROLL."],
+    ["THIS SIDE UP", "LATE ROADSTER LIVE"],
+    // after a ride over the ramp (cards 3 / 4 / 5: a clean landing / a rough one / an extra flip on the way down)
+    ["NAILED IT", "THE CROWD GOES WILD"],
+    ["THAT COUNTS", "WHEELS DOWN. MOSTLY."],
+    ["ONE MORE FLIP", "OFF THE TOP. WHY NOT."],
+  ];
+  const draw = (i: number) => {
+    const [title, sub] = cards[i % cards.length];
+    g.fillStyle = "#06070b";
+    g.fillRect(0, 0, 640, 352);
+    // LED pixel texture: faint dot grid
+    g.fillStyle = "rgba(255,255,255,0.035)";
+    for (let y = 2; y < 352; y += 6)
+      for (let x = 2; x < 640; x += 6) g.fillRect(x, y, 2, 2);
+    g.fillStyle = "#ff2a2a";
+    for (let x = 14; x < 630; x += 18) {
+      g.fillRect(x, 10, 8, 4);
+      g.fillRect(x, 338, 8, 4);
+    }
+    g.textAlign = "center";
+    g.textBaseline = "middle";
+    g.fillStyle = "#ffffff";
+    g.font = "900 92px system-ui, sans-serif";
+    g.fillText(title, 320, 160, 600);
+    g.fillStyle = "#ff3b3b";
+    g.fillRect(170, 222, 300, 6);
+    g.fillStyle = "#e9edf5";
+    g.font = "700 30px system-ui, sans-serif";
+    g.fillText(sub, 320, 266, 600);
+    g.fillStyle = "#ff3b3b";
+    g.beginPath();
+    g.arc(40, 52, 9, 0, Math.PI * 2);
+    g.fill();
+    g.textAlign = "left";
+    g.font = "800 24px system-ui, sans-serif";
+    g.fillText("LIVE", 58, 53);
+    tex.needsUpdate = true;
+  };
+  draw(0);
+  return { tex, draw };
 }
 
 /** "FLYERS $0" painted on the toll canopy roof (transparent, yellow), read by whoever flies in over it. */

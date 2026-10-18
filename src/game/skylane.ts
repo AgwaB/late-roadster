@@ -36,16 +36,39 @@ export function buildSkyLane(): SkyCar[] {
   return out;
 }
 
+/**
+ * Over the toll plaza the lane arches up out of jet reach: a car flying over the canopy (the TOLL $0 clip) can climb
+ * to ~21 m off its roof, so the flying cars hop the plaza at 23+ m instead of waiting there to wipe it out.
+ */
+export const SKY_ARCH = { x: C.TOLL_X, flat: 30, ramp: 40, h: 13 } as const;
+
+/** the arch at x: height added, and its gradient dh/dx */
+function arch(x: number): { dh: number; slope: number } {
+  const d = Math.abs(x - SKY_ARCH.x);
+  if (d >= SKY_ARCH.flat + SKY_ARCH.ramp) return { dh: 0, slope: 0 };
+  if (d <= SKY_ARCH.flat) return { dh: SKY_ARCH.h, slope: 0 };
+  const q = 1 - (d - SKY_ARCH.flat) / SKY_ARCH.ramp; // 0 at the foot .. 1 at the top
+  const g = (6 * q * (1 - q) * SKY_ARCH.h) / SKY_ARCH.ramp;
+  return {
+    dh: SKY_ARCH.h * q * q * (3 - 2 * q),
+    slope: x < SKY_ARCH.x ? g : -g,
+  };
+}
+
 export function skyCarAt(
   s: SkyCar,
   i: number,
   t: number,
-): { x: number; y: number; hc: number; heading: number } {
+): { x: number; y: number; hc: number; heading: number; pitch: number } {
   const u = (((s.ph + t * SKY_V * s.dir) % s.len) + s.len) % s.len;
+  const x = s.x0 + u;
+  const a = arch(x);
   return {
-    x: s.x0 + u,
+    x,
     y: s.y,
-    hc: s.h + 0.25 * Math.sin(t * 1.7 + i),
+    hc: s.h + a.dh + 0.25 * Math.sin(t * 1.7 + i),
     heading: s.dir > 0 ? 0 : Math.PI,
+    // nose up climbing the arch, down coming off it
+    pitch: Math.atan(a.slope * s.dir),
   };
 }

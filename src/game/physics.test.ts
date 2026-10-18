@@ -135,15 +135,15 @@ describe("car physics (Raycity layout)", () => {
     expect(emptyAt).toBeLessThan(C.FUEL_FLY_S + 0.5);
     expect(hSink).toBeLessThan(hHover - 3); // then sinking slowly although Space is still held
     expect(hSink).toBeGreaterThan(0.5);
-    expect(thrustTime).toBeGreaterThan(9);
+    expect(thrustTime).toBeGreaterThan(C.FUEL_FLY_S + 4); // the jets sputter on through the slow sink
     expect(minSp).toBeGreaterThan(C.SP_MAX - C.SP_JUMP - 1); // only the launch costs SP; flight burns fuel
     expect(evH.some((e) => e.startsWith("crash:"))).toBe(false);
     expect(evH).not.toContain("flipStart");
     expect(h.state).toBe("drive");
     expect(h.grounded).toBe(true);
     const f0 = h.fuel;
-    run(h, flat, 3, () => GAS);
-    expect(h.fuel).toBeCloseTo(f0 + 3 * C.FUEL_REFILL, 2);
+    run(h, flat, 1, () => GAS);
+    expect(h.fuel).toBeCloseTo(Math.min(1, f0 + C.FUEL_REFILL), 2);
     // a light hop, then Space again early on the way up: backflip at once (not only after reaching the top),
     // and holding that second press keeps the jets flying
     const a2 = newCar(0, 0, 0);

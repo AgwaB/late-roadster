@@ -198,6 +198,25 @@ export class Sfx {
         this.thump(0.8, 80, 0.35);
         this.burst(0.5, 0.3, 900, "lowpass");
         break;
+      case "scrape":
+        this.burst(0.18, 0.12, 2600, "bandpass");
+        break;
+      case "applause":
+        this.applause(v === "big" ? 1 : 0.55);
+        break;
+      case "liftoff":
+        this.liftoff();
+        break;
+      case "punch":
+        // the time clock: a hard clack and the card chunking down
+        this.burst(0.5, 0.04, 2600, "bandpass");
+        this.thump(0.6, 120, 0.16);
+        break;
+      case "news":
+        // a breaking-news card slides in: a short two-note newsroom chime
+        this.ding(784, 0.14);
+        this.ding(1175, 0.22, 0.12);
+        break;
       case "bump":
       case "cone":
         this.thump(0.5, 110, 0.18);
@@ -228,9 +247,10 @@ export class Sfx {
         this.thump(0.35, 55, 0.25);
         this.whoosh(1.2, 700, 1800, 0.7);
         break;
-      case "skyway":
-        this.thump(0.45, 60, 0.3);
-        this.whoosh(0.6, v === "up" ? 900 : 2200, v === "up" ? 2600 : 400, 0.9);
+      case "retro":
+        // off the ramp: the jets catch the falling car, a long heavy hiss down to the floor
+        this.thump(0.45, 50, 0.3);
+        this.whoosh(1.7, 600, 1500, 0.8);
         break;
       case "sidestep":
         this.whoosh(0.3, 400, 1400, 0.25);
@@ -370,7 +390,94 @@ export class Sfx {
     o.stop(t + dur + 0.02);
   }
 
-  /** BREAKING sting: three falling brass-ish tones. */
+  /**
+   * The grandstands erupt: a roar of crowd noise that swells and fades over ~4 s, a few hundred hand claps scattered
+   * over it (front-loaded), and a couple of whistles. strength 0..1.
+   */
+  private applause(strength: number): void {
+    const ctx = this.ctx!;
+    const t0 = ctx.currentTime;
+    // the roar
+    {
+      const s = ctx.createBufferSource();
+      s.buffer = this.noise;
+      s.loop = true;
+      const f = ctx.createBiquadFilter();
+      f.type = "bandpass";
+      f.frequency.value = 750;
+      f.Q.value = 0.6;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.001, t0);
+      g.gain.exponentialRampToValueAtTime(0.32 * strength, t0 + 0.35);
+      g.gain.setValueAtTime(0.32 * strength, t0 + 1.4);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + 4.2);
+      s.connect(f).connect(g).connect(this.master);
+      s.start(t0);
+      s.stop(t0 + 4.3);
+    }
+    // the claps
+    const n = Math.round(260 * strength);
+    for (let i = 0; i < n; i++) {
+      const d = 3.6 * Math.random() ** 1.8;
+      this.burst(
+        (0.05 + Math.random() * 0.09) * (1 - d / 4.2),
+        0.03 + Math.random() * 0.03,
+        1400 + Math.random() * 1600,
+        "bandpass",
+        d,
+        1.4,
+      );
+    }
+    // whistles
+    for (let k = 0; k < (strength > 0.8 ? 3 : 1); k++) {
+      const o = ctx.createOscillator();
+      o.type = "sine";
+      const t = t0 + 0.3 + k * 0.55 + Math.random() * 0.2;
+      o.frequency.setValueAtTime(1700, t);
+      o.frequency.exponentialRampToValueAtTime(2700, t + 0.25);
+      o.frequency.exponentialRampToValueAtTime(2300, t + 0.55);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.001, t);
+      g.gain.exponentialRampToValueAtTime(0.06, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      o.connect(g).connect(this.master);
+      o.start(t);
+      o.stop(t + 0.65);
+    }
+  }
+
+  /** A rocket lifting off over the event ground: a deep, long, crackling rumble. */
+  private liftoff(): void {
+    const ctx = this.ctx!;
+    const t0 = ctx.currentTime;
+    const s = ctx.createBufferSource();
+    s.buffer = this.noise;
+    s.loop = true;
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass";
+    f.frequency.setValueAtTime(260, t0);
+    f.frequency.exponentialRampToValueAtTime(120, t0 + 9);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.exponentialRampToValueAtTime(0.7, t0 + 1.2);
+    g.gain.setValueAtTime(0.7, t0 + 4);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 11);
+    s.connect(f).connect(g).connect(this.master);
+    s.start(t0);
+    s.stop(t0 + 11.2);
+    this.thump(0.9, 45, 1.2);
+    for (let i = 0; i < 70; i++)
+      this.burst(
+        0.05 + Math.random() * 0.06,
+        0.05,
+        500 + Math.random() * 900,
+        "bandpass",
+        0.6 + Math.random() * 7,
+        3,
+      );
+  }
+
+  /** Wipeout sting: three falling brass-ish tones. */
   private sting(): void {
     [
       [392, 0],

@@ -1,7 +1,8 @@
 // Traffic NPCs driving the road graph: lanes, random turns at intersections, car-following, event behaviours.
 import * as C from "./constants";
-import { type City, type Edge, edgePose } from "./city";
+import { type City, type Edge, edgePose, straightOn } from "./city";
 import { mulberry32 } from "./rng";
+import { VEHICLE_DIMS, type VehicleDims } from "./dims";
 
 export type NpcKind =
   | "sedan"
@@ -63,6 +64,8 @@ export interface Npc {
     t: number;
     next: Edge;
     nextDir: 1 | -1;
+    /** lane on the next road (moved out of an inner lane closed there) */
+    lane: number;
   } | null;
   braking: boolean;
   ttl: number;
@@ -85,30 +88,8 @@ export type NpcPose = Pick<
   "kind" | "x" | "y" | "heading" | "yOff" | "pitch" | "roll" | "dead"
 >;
 
-/**
- * Collision box per kind = the rendered model's body (measured from the GLBs: length, roof height, and the half-width
- * of the rear 60 % so wing mirrors don't inflate it). Keep in sync when a model changes.
- */
-export const NPC_DIMS: Record<
-  NpcKind,
-  { halfL: number; halfW: number; h: number }
-> = {
-  sedan: { halfL: 2.2, halfW: 1.0, h: 1.5 },
-  sedan2: { halfL: 2.25, halfW: 0.9, h: 1.25 },
-  hatchback: { halfL: 2.05, halfW: 1.05, h: 1.85 },
-  wagon: { halfL: 2.35, halfW: 1.05, h: 1.85 },
-  suv: { halfL: 2.35, halfW: 1.1, h: 1.7 },
-  taxi: { halfL: 2.25, halfW: 0.9, h: 1.4 },
-  police: { halfL: 2.3, halfW: 1.05, h: 1.55 },
-  van: { halfL: 2.5, halfW: 1.15, h: 2.15 },
-  truck: { halfL: 3.25, halfW: 1.6, h: 3.55 },
-  pickup: { halfL: 2.65, halfW: 1.15, h: 1.9 },
-  sports: { halfL: 2.25, halfW: 1.0, h: 1.4 },
-  convertible: { halfL: 2.3, halfW: 0.95, h: 1.4 },
-  bus: { halfL: 5.75, halfW: 1.8, h: 3.55 },
-  camper: { halfL: 2.5, halfW: 1.15, h: 2.15 },
-  roadster: { halfL: 2.35, halfW: 1.0, h: 1.15 },
-};
+/** Collision box per kind = the rendered model's body (src/game/dims.ts). */
+export const NPC_DIMS: Record<NpcKind, VehicleDims> = VEHICLE_DIMS;
 
 /** Vertical extent of an NPC's body for its current stunt pose (the model pivots on its bottom centre). */
 export function npcSpan(n: {
@@ -172,6 +153,12 @@ const CRUISE_KINDS: NpcKind[] = [
   "police",
   "bus",
 ];
+
+/** A lane on this road clear of an inner lane closed there (lane 1 instead of 0 beside the skyway's ramps). */
+function laneOn(edge: Edge, lane: number): number {
+  const m = edge.laneMin ?? 0;
+  return lane >= 0 && lane < m ? m : lane;
+}
 
 /** Distance to back the rear body out of an overlapping OBB along its heading (SAT).
  * Vertical separation deliberately allows jets and backflips to pass over traffic.
@@ -267,6 +254,7 @@ export class Traffic {
     v: number,
     ttl: number,
   ): Npc {
+    lane = laneOn(edge, lane);
     const p = edgePose(this.city, edge, dir, s, lane);
     const npc: Npc = {
       id: this.nextId++,
@@ -331,7 +319,8 @@ export class Traffic {
   }
   /** Ambulance (white van) coming up fast behind in the player's lane. */
   spawnAmbulance(edge: Edge, dir: 1 | -1, s: number, lane: number): Npc {
-    return this.add("van", "ambulance", edge, dir, s, lane, 44, 30);
+    // faster than the player's 42 m/s cruise, so it actually catches up (it is 65 m behind)
+    return this.add("van", "ambulance", edge, dir, s, lane, 58, 30);
   }
   /** Bus that somersaults at every stop. */
   spawnBounceBus(edge: Edge, dir: 1 | -1, s: number, lane: number): Npc {
@@ -429,14 +418,15 @@ export class Traffic {
     }
   }
 
-  private beginTurn(n: Npc): void {
+  private beginTurn(n: Npc, straight?: { edge: Edge; dir: 1 | -1 }): void {
     const city = this.city;
     const node = city.nodes[n.dir > 0 ? n.edge.b : n.edge.a];
     const options = node.edges
       .filter((id) => id !== n.edge.id)
       .map((id) => city.edges[id]);
     let next: Edge;
-    if (options.length === 0)
+    if (straight) next = straight.edge;
+    else if (options.length === 0)
       next = n.edge; // dead end: U-turn
     else {
       const straight = options.filter((e) => e.axis === n.edge.axis);
@@ -446,8 +436,9 @@ export class Traffic {
           : options[Math.floor(this.rnd() * options.length)];
     }
     const nextDir: 1 | -1 = next.a === node.id ? 1 : -1;
+    const lane = laneOn(next, n.lane);
     const p0 = edgePose(city, n.edge, n.dir, n.edge.len - C.ROAD_HALF, n.lane);
-    const p2 = edgePose(city, next, nextDir, C.ROAD_HALF, n.lane);
+    const p2 = edgePose(city, next, nextDir, C.ROAD_HALF, lane);
     const u0 = [Math.cos(p0.heading), Math.sin(p0.heading)];
     const d = [p2.x - p0.x, p2.y - p0.y];
     const proj = d[0] * u0[0] + d[1] * u0[1];
@@ -466,6 +457,7 @@ export class Traffic {
       t: 0,
       next,
       nextDir,
+      lane,
     };
   }
 
@@ -846,6 +838,8 @@ export class Traffic {
         if (tr.t >= 1) {
           n.edge = tr.next;
           n.dir = tr.nextDir;
+          n.lane = tr.lane;
+          n.laneTarget = laneOn(n.edge, n.laneTarget);
           n.s = C.ROAD_HALF;
           n.turn = null;
           const p = edgePose(this.city, n.edge, n.dir, n.s, n.lane);
@@ -857,7 +851,18 @@ export class Traffic {
         n.s += n.v * dt;
         if (n.s >= n.edge.len - C.ROAD_HALF) {
           n.s = n.edge.len - C.ROAD_HALF;
+          // the event vehicles (camper, sudden bus, ambulance, wrong-way car...) go straight on into the next
+          // block, so they are still there when the player gets to them (unless that is a bridge / the tunnel
+          // jam / a skyway-ramp block, or no road goes on); they go once well behind the player
+          const on = persistent ? null : straightOn(this.city, n.edge, n.dir);
           if (persistent) this.beginTurn(n);
+          else if (
+            on &&
+            !on.edge.crossing &&
+            !on.edge.laneMin &&
+            !on.edge.noNpc.some((z) => z.dir === on.dir)
+          )
+            this.beginTurn(n, on);
           else {
             n.dead = true;
             continue;

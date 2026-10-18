@@ -148,21 +148,28 @@ body {
   height: 100%;
 }
 
+/* WIPEOUT band (a crash is not news): yellow title and the cause on a dark wash, sliding in from the left */
 .band {
   top: 22%;
   left: 0;
   right: 0;
   height: 56px;
-  background: #d80f0f;
+  background: linear-gradient(
+    90deg,
+    rgba(11, 15, 34, 0.94) 0%,
+    rgba(11, 15, 34, 0.8) 45%,
+    rgba(11, 15, 34, 0) 85%
+  );
+  border-left: 6px solid #ffd23f;
   display: flex;
   align-items: center;
   gap: 18px;
   padding-left: 20px;
-  transform: translateY(-120%);
+  transform: translateX(-30%);
   opacity: 0;
   transition:
-    transform 0.15s,
-    opacity 0.15s;
+    transform 0.18s,
+    opacity 0.18s;
   font-weight: 900;
   letter-spacing: 0.08em;
 }
@@ -170,12 +177,111 @@ body {
   transform: none;
   opacity: 1;
 }
-.band .live {
-  font-size: 14px;
+.band .wtitle {
+  color: #ffd23f;
+  font-size: clamp(22px, 2.8vw, 36px);
+  letter-spacing: 0.12em;
+}
+.band .wcause {
+  font-size: clamp(14px, 1.6vw, 20px);
+  opacity: 0.92;
+}
+
+/* at a clip's beam: TO FILM + title + what to press there, bottom centre above the speedometer */
+.beamhint {
+  left: 50%;
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + 96px);
+  transform: translate(-50%, 12px);
+  max-width: min(560px, 86vw);
+  background: rgba(11, 15, 34, 0.9);
+  border-radius: 10px;
+  padding: 8px 14px 9px;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+  text-align: center;
+}
+.beamhint.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.beamhint .bh-hd {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: 800 12px system-ui;
+  letter-spacing: 0.12em;
+}
+.beamhint .bh-hd i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.beamhint .bh-hd span {
+  opacity: 0.7;
+}
+.beamhint .bh-hd b {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+.beamhint .bh-how {
+  margin-top: 3px;
+  font: 600 14px system-ui;
+}
+
+/* BREAKING NEWS card, top right under the compass: a picture with a red label and one headline line */
+.news {
+  top: calc(max(12px, env(safe-area-inset-top)) + 70px);
+  right: 14px;
+  width: 248px;
+  background: rgba(11, 15, 34, 0.92);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  transition:
+    transform 0.25s ease-out,
+    opacity 0.25s;
+}
+.news.show {
+  transform: none;
+  opacity: 1;
+}
+.news .nframe {
+  position: relative;
+}
+.news img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+.news .nlabel {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #d80f0f;
+  padding: 3px 10px 3px 8px;
+  font: 900 12px system-ui;
+  letter-spacing: 0.1em;
+}
+.news .nlive {
+  font-size: 10px;
   animation: blink 0.8s infinite;
 }
-.band .breaking {
-  font-size: clamp(18px, 2.3vw, 30px);
+.news .nhead {
+  padding: 7px 10px 9px;
+  font: 800 13px / 1.25 system-ui;
+  letter-spacing: 0.02em;
 }
 @keyframes blink {
   50% {
@@ -294,6 +400,11 @@ body {
 .next.save.hidden {
   display: none;
 }
+/* the run's best stunt: the one worth sharing */
+.next.save.best {
+  background: #ffd23f;
+  color: #15161a;
+}
 .next:disabled {
   opacity: 0.6;
   cursor: default;
@@ -393,16 +504,7 @@ button:focus-visible {
   outline-offset: 4px;
 }
 #hud:has(.result:not(.hidden))
-  > :is(
-    .ticker,
-    .facecam,
-    .band,
-    .lines,
-    .views,
-    .toast,
-    .penalty,
-    .crashinfo
-  ) {
+  > :is(.news, .facecam, .band, .lines, .views, .toast, .penalty, .crashinfo) {
   visibility: hidden;
 }
 .credits.hidden {
@@ -438,45 +540,12 @@ button:focus-visible {
   opacity: 1;
   transform: rotate(-3deg) scale(1);
 }
-/* BREAKING ticker: icons scroll across the bottom */
-.ticker {
-  left: 0;
-  right: 0;
-  bottom: 64px;
-  height: 36px;
-  font-size: 26px;
-  line-height: 36px;
-  white-space: nowrap;
-  overflow: hidden;
-  pointer-events: none;
-  opacity: 0;
-}
-.ticker.run {
-  opacity: 1;
-  animation: tick 5s linear forwards;
-  background: linear-gradient(
-    90deg,
-    rgba(204, 32, 32, 0) 0%,
-    rgba(204, 32, 32, 0.85) 15%,
-    rgba(204, 32, 32, 0.85) 85%,
-    rgba(204, 32, 32, 0) 100%
-  );
-}
-@keyframes tick {
-  from {
-    text-indent: 100vw;
-  }
-  to {
-    text-indent: -40vw;
-  }
-}
 @media (pointer: coarse) {
-  .ticker {
-    bottom: auto;
-    top: 128px;
-    height: 30px;
-    font-size: 20px;
-    line-height: 30px;
+  /* the minimap sits under the compass on touch: the news card goes just left of it */
+  .news {
+    top: 96px;
+    right: 168px;
+    width: 200px;
   }
   .facecam {
     top: 70px;
@@ -756,7 +825,7 @@ button:focus-visible {
 }
 .lb-tile img {
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 2 / 1;
   object-fit: cover;
   display: block;
 }
@@ -787,6 +856,7 @@ button:focus-visible {
     Menlo,
     monospace;
   color: #fff;
+  white-space: nowrap;
 }
 .lb-prog {
   flex: 0 0 120px;
@@ -946,6 +1016,27 @@ button:focus-visible {
     opacity: 0;
   }
 }
+/* the rocket liftoff cut-away: how to cut back to the car */
+.cutskip {
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  font:
+    800 14px ui-monospace,
+    Menlo,
+    monospace;
+  letter-spacing: 0.12em;
+  white-space: pre;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 6px 12px;
+  border-radius: 8px;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+.cutskip.show {
+  opacity: 1;
+}
 .crashinfo {
   top: calc(22% + 66px);
   left: 20px;
@@ -1011,6 +1102,52 @@ button:focus-visible {
   display: flex;
   gap: 12px;
 }
+/* PHOTO FINISH: the arrival as a punched time-card photo, pinned at the side of the result */
+.rphoto {
+  position: absolute;
+  right: 5vw;
+  top: 50%;
+  width: min(28vw, 340px);
+  padding: 10px 10px 0;
+  background: #f4f1ea;
+  border-radius: 4px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  transform: translateY(-50%) rotate(4deg);
+  opacity: 0;
+  transition:
+    opacity 0.25s,
+    transform 0.35s;
+}
+.rphoto.show {
+  opacity: 1;
+  transform: translateY(-50%) rotate(-3deg);
+}
+.rphoto img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  background: #222;
+}
+.rphoto b {
+  display: block;
+  padding: 8px 2px 10px;
+  font:
+    900 18px ui-monospace,
+    Menlo,
+    monospace;
+  letter-spacing: 0.08em;
+  color: #1c1f27;
+  text-align: center;
+}
+.rphoto.late b {
+  color: #d62b2b;
+}
+@media (max-width: 760px) {
+  .rphoto {
+    display: none;
+  }
+}
 .next.alt {
   background: #2b2f3a;
   color: #fff;
@@ -1047,8 +1184,9 @@ button:focus-visible {
 }
 .lb-cthumb {
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 2 / 1;
   object-fit: cover;
+  object-position: 50% 40%;
   border-radius: 6px;
   display: block;
   margin-bottom: 2px;

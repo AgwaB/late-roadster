@@ -116,6 +116,16 @@ const PHOTO_ALPHA = [
   "TW_01",
   "MT_01",
   "CR_01",
+  // round 5 (tools/r5_cutouts.py): cyclists from behind / the front, the white tractor's side and front, the
+  // orbiting mannequin, the event barrier (alpha); the grandstand front and toll canopy fascia / soffit (opaque)
+  ...[1, 2, 3, 4, 5].flatMap((i) => ["BK_R" + i, "BK_F" + i]),
+  "SM_01",
+  "SM_03",
+  "MQ_01",
+  "EV_02",
+  "EV_01",
+  "TP_01",
+  "TP_02",
 ];
 
 const SURFACES = [

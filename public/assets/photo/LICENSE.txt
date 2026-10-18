@@ -23,6 +23,17 @@ Round 4: source images in research/raycity/generated/2026-10-18-round4/; prompts
   (alpha/decal processing: tools/r4_textures_alpha.py).
 - KA_01, KA_01_sm: key art behind the lobby and the result card.
 
+Round 5: source images in research/raycity/generated/2026-10-18-round5/; prompts: research/raycity/IMAGE_PROMPTS_ROUND5.md.
+- BK_R1..BK_R5 / BK_F1..BK_F5: the cycling club from behind / from the front, one rider per file (from BK_01 / BK_02);
+  SM_01 / SM_03: the white cab-over tractor's side and front; MQ_01: the orbiting suited mannequin; EV_02: the event
+  crowd barrier (alpha from darkness, cut post to post). Keyed by tools/r5_cutouts.py (the round-3 keyer).
+- EV_01: event grandstand front; TP_01 / TP_02: toll canopy fascia band and soffit (opaque, edges cross-faded to
+  tile; tools/r5_cutouts.py).
+- ../clips/*.webp: lobby clip thumbnails from CL_01..CL_08, CL_10..CL_12; ../clips/peloton.webp is a composite of
+  round-3 R_05 (empty boulevard) and R_07 (the roadster from behind) with the BK_R riders; ../../og.jpg from OG_01
+  with the title set in Pretendard ExtraBold (SIL Open Font License 1.1); ../../favicon.svg and the icon PNGs traced
+  from FV_01 (tools/r5_share.py).
+
 Late Roadster releases its rights in these generated images and processed textures under CC0 1.0, to the extent such rights exist.
 License: https://creativecommons.org/publicdomain/zero/1.0/
 This dedication does not relicense any third-party models or imply a warranty about trademark rights.

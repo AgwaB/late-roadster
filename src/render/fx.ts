@@ -1,7 +1,7 @@
 // Particle FX: cold-gas thruster puffs, boost exhaust, drift smoke, crash sparks. One Points draw call.
 import * as THREE from "three";
 
-const MAX = 1200;
+const MAX = 2400; // smoke, confetti and the rocket's exhaust share the pool
 
 function spriteTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");

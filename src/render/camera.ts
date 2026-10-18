@@ -18,6 +18,13 @@ export class ChaseCam {
   private shake = new THREE.Vector3();
   private orbit = 0;
   private init = false;
+  /** a decaying shake (landing impacts): metres of jitter, falls off over ~0.6 s */
+  private kickAmp = 0;
+
+  /** shake the camera, e.g. on a big landing (amp in metres) */
+  kick(amp: number): void {
+    this.kickAmp = Math.max(this.kickAmp, amp);
+  }
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
@@ -33,11 +40,16 @@ export class ChaseCam {
     maxY = Infinity,
     /** ground height under the car (road, skyway deck, toll canopy roof) */
     groundH = 0,
+    /** a set shot (e.g. off the ramp's lip: from the side of the ramp, on the car), swooped to and from */
+    cine: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null,
   ): void {
     const fwd = this.fwd.set(Math.cos(heading), 0, -Math.sin(heading));
     const targetPos = this.targetPos.copy(carPos);
     const targetLook = this.targetLook.copy(carPos);
-    if (car.state === "crash") {
+    if (cine) {
+      targetPos.copy(cine.pos);
+      targetLook.copy(cine.look);
+    } else if (car.state === "crash") {
       this.orbit += dt * 1.1;
       targetPos.x += Math.cos(this.orbit) * 9;
       targetPos.y += 3.2;
@@ -56,10 +68,9 @@ export class ChaseCam {
       // the ceiling view (below the car) eases in with the half roll, so the rise itself is filmed from above
       const over = car.ceiling ? Math.min(1, Math.abs(car.roll) / Math.PI) : 0;
       const lift = 3.1 - 4.9 * over;
-      // on a hop the camera climbs only part of the way, so the car visibly soars up the frame (not during a skyway
-      // climb: the camera rides up with the car, or the deck would block the view). In real flight, high above the
-      // road, it rises over the car instead and tilts down, so the road and what is below stay in view.
-      const air = !(car.grounded || car.ceiling || car.shift);
+      // on a hop the camera climbs only part of the way, so the car visibly soars up the frame. In real flight, high
+      // above the road, it rises over the car instead and tilts down, so the road and what is below stay in view.
+      const air = !(car.grounded || car.ceiling);
       const alt = air ? Math.max(0, car.h - groundH) : 0;
       const high = smooth01((alt - 3) / 6); // 0 up to 3 m, 1 from 9 m
       const airDrop = Math.min(alt, 2.5) * 0.55 * (1 - high);
@@ -80,6 +91,17 @@ export class ChaseCam {
     this.pos.lerp(targetPos, k);
     this.look.lerp(targetLook, k);
     this.camera.position.copy(this.pos);
+    if (this.kickAmp > 0.01) {
+      const a = this.kickAmp;
+      this.camera.position.add(
+        this.shake.set(
+          (Math.random() - 0.5) * a,
+          (Math.random() - 0.5) * a,
+          (Math.random() - 0.5) * a,
+        ),
+      );
+      this.kickAmp *= Math.exp(-6 * dt);
+    }
     if (car.boosting)
       this.camera.position.add(
         this.shake.set(

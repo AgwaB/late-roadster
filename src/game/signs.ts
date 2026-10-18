@@ -173,16 +173,33 @@ export function buildSigns(city: City): CitySigns {
         );
   // sign gantries: nose through the board, tail up over the lanes, a torn flap hanging, chunks on the road
   const use = (eid: number) => routeUse.get(eid) ?? 0;
-  // sign wrecks: the busiest commute-route gantries first, a few elsewhere for free roamers
+  // sign wrecks: about one gantry in three, so a car speared into a board stays a sight rather than the look of every
+  // sign. Along each commute, in driving order, every third gantry (routes share the corridor: one already picked by
+  // an earlier commute counts), and one in three of the gantries no commute passes.
+  const picked = new Set<string>();
+  for (const cm of city.commutes) {
+    const path = shortestPath(city, cm.home.id, cm.office.id);
+    const along: DirectionSign[] = [];
+    for (let i = 1; i < path.length; i++) {
+      const eid = path[i - 1].edges.find((id) => {
+        const e = city.edges[id];
+        return e.a === path[i].id || e.b === path[i].id;
+      });
+      if (eid !== undefined)
+        along.push(...direction.filter((g) => g.eid === eid));
+    }
+    const target = Math.floor(along.length / 3);
+    let have = along.filter((g) => picked.has(g.id)).length;
+    for (let i = 1; i < along.length && have < target; i += 3)
+      if (!picked.has(along[i].id)) {
+        picked.add(along[i].id);
+        have++;
+      }
+  }
+  const offRoute = direction.filter((g) => use(g.eid) === 0);
   const wreckGantries = [
-    ...direction
-      .filter((g) => use(g.eid) > 0)
-      .sort((a, b) => use(b.eid) - use(a.eid))
-      .slice(0, 12),
-    ...spread(
-      direction.filter((g) => use(g.eid) === 0),
-      4,
-    ),
+    ...direction.filter((g) => picked.has(g.id)),
+    ...spread(offRoute, Math.round(offRoute.length / 3)),
   ];
 
   const wrecks: SignWreck[] = wreckGantries.map((p, i) => {

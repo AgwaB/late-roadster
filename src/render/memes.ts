@@ -19,6 +19,9 @@ import {
   ROW_HALF,
   ROW_OFFSETS,
   STANDS,
+  displayStage,
+  launchPad,
+  eventScreen,
   floodlights,
   grandstands,
   powerPoles,
@@ -26,7 +29,7 @@ import {
   rampPoint,
   rampWorld,
 } from "../game/venue";
-import { martSite } from "../game/landmarks";
+import { cartReturn, martSite } from "../game/landmarks";
 import * as C from "../game/constants";
 import type { Assets, Model } from "./assets";
 import { KIND_MODEL, PLAYER_MODEL } from "./vehicles";
@@ -80,8 +83,14 @@ class Fleet {
       this.meshes.push(im);
     });
   }
-  begin(): void {
+  /** camera (world x/z) for the distance cull: roadsters past FAR are not drawn */
+  private cx = 0;
+  private cz = 0;
+  static readonly FAR = 480;
+  begin(camX = 0, camZ = 0): void {
     this.n = 0;
+    this.cx = camX;
+    this.cz = camZ;
   }
   /** add one car: game coords (x, y), centre height hc, heading/pitch/roll as in NpcRenderer (pivot at the centre) */
   add(
@@ -93,6 +102,9 @@ class Fleet {
     pitch = 0,
     roll = 0,
   ): void {
+    const dx = x - this.cx,
+      dz = -y - this.cz;
+    if (dx * dx + dz * dz > Fleet.FAR * Fleet.FAR) return;
     const i = this.n++;
     if (i >= this.meshes[0].instanceMatrix.count) return;
     this.e.set(roll, heading, pitch, "YXZ");
@@ -111,6 +123,7 @@ class Fleet {
   end(): void {
     for (const im of this.meshes) {
       im.count = Math.min(this.n, im.instanceMatrix.count);
+      im.visible = im.count > 0;
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
     }
@@ -303,8 +316,71 @@ function photoBooster(
   return { root, flame, legs };
 }
 
-/** A generic white cab-over semi tractor (no trailer), ~6.6 m long and 3.9 m tall; forward +x, origin on the ground. */
-function semiTractor(): THREE.Group {
+/**
+ * One floodlight fixture after the round-5 EV_03 head, facing local +x, centred on the origin: a dark housing with
+ * heat-sink fins behind it (userData.lit unset) and the bright lens on its face (userData.lit = true).
+ */
+function floodFixture(h: number, w: number): THREE.BufferGeometry[] {
+  const out = [new THREE.BoxGeometry(0.22, h, w)];
+  for (let k = 0; k < 5; k++)
+    out.push(
+      new THREE.BoxGeometry(0.16, h * 0.92, 0.03).translate(
+        -0.19,
+        0,
+        -w / 2 + ((k + 0.5) * w) / 5,
+      ),
+    );
+  const lens = new THREE.BoxGeometry(0.03, h * 0.86, w * 0.88).translate(
+    0.115,
+    0,
+    0,
+  );
+  lens.userData.lit = true;
+  out.push(lens);
+  return out;
+}
+
+/** A stage CO2 cannon after the round-5 EV_04 reference: flared barrel tilted up along local +x on a tripod. */
+function smokeCannon(): THREE.BufferGeometry[] {
+  const tilt = new THREE.Matrix4().makeRotationZ(0.35).setPosition(0, 1.05, 0);
+  const out = [
+    new THREE.CylinderGeometry(0.15, 0.15, 1.1, 12)
+      .rotateZ(-Math.PI / 2)
+      .applyMatrix4(tilt),
+    new THREE.CylinderGeometry(0.27, 0.15, 0.32, 14, 1, true)
+      .rotateZ(-Math.PI / 2)
+      .translate(0.7, 0, 0)
+      .applyMatrix4(tilt),
+    new THREE.BoxGeometry(0.22, 0.16, 0.16)
+      .translate(-0.45, -0.15, 0)
+      .applyMatrix4(tilt), // valve box
+    new THREE.CylinderGeometry(0.05, 0.05, 0.3, 8).translate(0, 0.9, 0), // tilt bracket
+  ];
+  for (let k = 0; k < 3; k++) {
+    const a = (k * 2 * Math.PI) / 3 + 0.5;
+    const foot = new THREE.Vector3(Math.cos(a) * 0.55, 0, Math.sin(a) * 0.55);
+    const top = new THREE.Vector3(0, 0.82, 0);
+    const len = foot.distanceTo(top);
+    out.push(
+      new THREE.CylinderGeometry(0.025, 0.025, len, 6)
+        .translate(0, len / 2, 0)
+        .applyMatrix4(
+          new THREE.Matrix4()
+            .lookAt(foot, top, new THREE.Vector3(0, 0, 1))
+            .multiply(new THREE.Matrix4().makeRotationX(-Math.PI / 2))
+            .setPosition(foot),
+        ),
+    );
+  }
+  return out.map((g) => (g.index ? g.toNonIndexed() : g));
+}
+
+/**
+ * A generic white cab-over semi tractor (no trailer), ~6.6 m long and 3.9 m tall; forward +x, origin on the ground.
+ * With the round-5 cut-outs, its sides wear the SM_01 side photo (nose left, mirrored on the right side) and its nose
+ * the SM_03 front photo, over the box body that gives it volume from above and at an angle.
+ */
+function semiTractor(side?: THREE.Texture, front?: THREE.Texture): THREE.Group {
   const g = new THREE.Group();
   const white: THREE.BufferGeometry[] = [],
     dark: THREE.BufferGeometry[] = [],
@@ -328,10 +404,10 @@ function semiTractor(): THREE.Group {
     );
   box(dark, -3.3, 3.0, 0.55, 0.95, 0.5); // frame rails
   box(dark, -3.1, -0.2, 0.95, 1.12, 1.15); // fifth-wheel deck
-  box(white, 0.6, 3.25, 1.0, 3.55, 1.25); // cab
-  box(white, 0.9, 3.0, 3.55, 3.85, 1.15); // roof fairing
-  box(white, -0.9, 0.6, 1.0, 3.3, 1.2); // sleeper back
-  box(white, -1.2, 0.5, 0.45, 1.05, 1.27); // side skirts / tanks
+  // proportions measured off the round-5 SM_01 side photo: cab back 3.1 m behind the nose, axles 1.5 / 4.45 / 5.8 m
+  box(white, 0.22, 3.25, 1.0, 3.45, 1.25); // cab
+  box(white, 0.22, 2.4, 3.45, 3.85, 1.15); // roof fairing
+  box(white, -1.0, 0.22, 0.45, 1.05, 1.27); // side skirts / tanks
   box(dark, 3.22, 3.3, 0.8, 1.9, 1.15); // grille
   box(glass, 3.24, 3.3, 2.25, 3.35, 1.18); // windscreen
   for (const z of [-1, 1]) {
@@ -343,7 +419,7 @@ function semiTractor(): THREE.Group {
     ); // headlamps
   }
   lamp.push(new THREE.BoxGeometry(0.06, 0.06, 2.1).translate(3.27, 3.45, 0)); // light bar
-  for (const x of [2.3, -1.4, -2.65])
+  for (const x of [1.83, -1.13, -2.47])
     for (const z of [-1, 1])
       tyre.push(
         new THREE.CylinderGeometry(0.52, 0.52, 0.4, 18)
@@ -386,12 +462,51 @@ function semiTractor(): THREE.Group {
     tyre,
     new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 }),
   );
+  const photo = (t: THREE.Texture) =>
+    new THREE.MeshStandardMaterial({ map: t, alphaTest: 0.5, roughness: 0.45 });
+  const size = (t: THREE.Texture) => {
+    const im = t.image as { width: number; height: number };
+    return im.width / im.height;
+  };
+  if (side) {
+    // the cut-out keeps a 2% margin above and either side and none below the tyres: 3.9 m of truck is ~98% of it
+    const h = 3.9 / 0.98,
+      w = h * size(side);
+    for (const z of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), photo(side));
+      m.position.set(0, h / 2, z * 1.3);
+      // the photo's nose points left: seen from +z that is -x, so mirror that side
+      if (z > 0) m.scale.x = -1;
+      else m.rotation.y = Math.PI;
+      g.add(m);
+    }
+  }
+  if (front) {
+    const h = 3.9 / 0.98,
+      w = h * size(front);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), photo(front));
+    m.rotation.y = Math.PI / 2;
+    m.position.set(3.34, h / 2, 0);
+    g.add(m);
+  }
   return g;
 }
 
 const PALETTE = [0xd62828, 0x2f5fd0, 0xf2f2f2, 0x15171a, 0xc9ced6, 0x2a9d8f];
 
 const JET = new THREE.Color(0xdfe8ee);
+const UP_Y = new THREE.Vector3(0, 1, 0);
+const CONFETTI = [0xff3b3b, 0xffffff, 0xffd23f, 0xff8a3d].map(
+  (c) => new THREE.Color(c),
+);
+const EXHAUST = new THREE.Color(0xd8d6d0);
+/** s from ignition to the rocket leaving the pad */
+const ROCKET_HOLD = 1.0;
+/** the liftoff set shot, s after ignition (from just after touchdown until it is well up) */
+const ROCKET_SHOT = [0.4, 4.4] as const;
+const ONE = new THREE.Vector3(1, 1, 1);
+/** metres from a clip beam at which it reacts (matches the HUD hint radius) */
+const BEAM_NEAR = 34;
 
 export class MemeView {
   group = new THREE.Group();
@@ -422,6 +537,34 @@ export class MemeView {
   private orbit: THREE.Group | null = null;
   private demoS = -99;
   private rampPhase = 0;
+  /** live-event dressing (buildEventDressing): the crowd in the stands, moving-head beams, the LED screen */
+  private crowd: { im: THREE.InstancedMesh; pos: Float32Array }[] = [];
+  private crowdCam = new THREE.Vector3(1e9, 0, 0);
+  private venueMid = new THREE.Vector3();
+  private beams: { head: THREE.Object3D; ph: number; yaw0: number }[] = [];
+  private screen: { draw(i: number): void; card: number } | null = null;
+  /** the display stage (a roadster turns on it) */
+  private display: { x: number; y: number; r: number; h: number } | null = null;
+  private smokeT = 0;
+  private hazeT = 0;
+  /** the player rode the ramp: the stands erupt (celebrate), until cheerT + ~5 s */
+  private cheerT = -99;
+  private cheerAt = { x: 0, y: 0 };
+  private cheerBig = false;
+  /** the LED screen's card while they cheer: NAILED IT / THAT COUNTS / ONE MORE FLIP */
+  private cheerCard = 3;
+  /** the rocket on the launch pad: launch time (-1 while it stands on the pad) */
+  private rocket: {
+    body: THREE.Group;
+    flame: THREE.Mesh;
+    base: THREE.Vector3;
+  } | null = null;
+  private rocketT = -1;
+  /** the player skipped this launch's liftoff shot */
+  private shotSkipped = false;
+  private nozzle = new THREE.Vector3();
+  private shotOff = new THREE.Vector3();
+  private beamAim = new THREE.Vector3();
   /** smoke cannons at the kickflip row's ends (dir: the way they blow along the run) */
   private cannons: { x: number; y: number; dir: number }[] = [];
   private e = new THREE.Euler();
@@ -732,6 +875,8 @@ export class MemeView {
     }
     this.buildKickflipRow(st, z0, darkSteel, red);
     this.buildRamp(st, z0, steel, darkSteel, red);
+    this.buildEventDressing(st, z0, darkSteel, red);
+    this.buildRocket(st, z0, steel, darkSteel);
     // ---- grandstands: stepped banks with a red light strip on every riser, along the south and west edges
     {
       const parts: THREE.BufferGeometry[] = [],
@@ -813,6 +958,50 @@ export class MemeView {
           }
         }
       }
+      // round-5 EV_01 (the front of a 7-tier stand, tiling left-right) on the visible strip of every riser
+      const ev1 = this.assets.tex.get("EV_01");
+      if (ev1) {
+        const tileW =
+          (N * R * (ev1.image as { width: number }).width) /
+          (ev1.image as { height: number }).height;
+        const faces: THREE.BufferGeometry[] = [];
+        for (const gs of grandstands(fl)) {
+          const b = gs.box;
+          for (let k = 0; k < N; k++) {
+            const north = gs.facing === "north";
+            const len = north ? b.x1 - b.x0 : b.y1 - b.y0;
+            const g = new THREE.PlaneGeometry(len, R);
+            const uv = g.attributes.uv as THREE.BufferAttribute;
+            for (let i = 0; i < uv.count; i++)
+              uv.setXY(i, (uv.getX(i) * len) / tileW, (k + uv.getY(i)) / N);
+            if (north)
+              g.rotateY(Math.PI).translate(
+                (b.x0 + b.x1) / 2,
+                z0 + (k + 0.5) * R,
+                -(b.y1 - k * D + 0.02),
+              );
+            else
+              g.rotateY(Math.PI / 2).translate(
+                b.x1 - k * D + 0.02,
+                z0 + (k + 0.5) * R,
+                -(b.y0 + b.y1) / 2,
+              );
+            faces.push(g);
+          }
+        }
+        this.group.add(
+          new THREE.Mesh(
+            mergeGeometries(faces)!,
+            new THREE.MeshStandardMaterial({
+              map: ev1,
+              emissive: 0xffffff,
+              emissiveMap: ev1,
+              emissiveIntensity: 0.35,
+              roughness: 0.8,
+            }),
+          ),
+        );
+      }
       const m = new THREE.Mesh(
         mergeGeometries(parts)!,
         new THREE.MeshStandardMaterial({ color: 0x2b2e34, roughness: 0.8 }),
@@ -843,14 +1032,28 @@ export class MemeView {
           .makeRotationY(Math.atan2(cy - y, cx - x))
           .multiply(new THREE.Matrix4().makeRotationZ(-0.45))
           .setPosition(x, z0 + FLOOD_H + 1.2, -y);
-        poles.push(new THREE.BoxGeometry(0.4, 2.4, 4).applyMatrix4(m));
+        // an open frame (side posts, top / middle / bottom bars) so the fins show from behind
+        for (const z of [-2.05, 2.05])
+          poles.push(
+            new THREE.BoxGeometry(0.12, 2.6, 0.12)
+              .translate(-0.05, -0.05, z)
+              .applyMatrix4(m),
+          );
+        for (const y of [-1.15, -0.03, 1.1])
+          poles.push(
+            new THREE.BoxGeometry(0.12, 0.12, 4.1)
+              .translate(-0.05, y, 0)
+              .applyMatrix4(m),
+          );
+        // as the round-5 EV_03 head: six fixtures in two rows of three, each a dark finned housing with a lit lens
         for (let i = 0; i < 3; i++)
           for (let j = 0; j < 2; j++)
-            lamps.push(
-              new THREE.BoxGeometry(0.15, 0.85, 1.05)
-                .translate(0.25, -0.6 + j * 1.15, -1.25 + i * 1.25)
-                .applyMatrix4(m),
-            );
+            for (const g of floodFixture(0.85, 1.05))
+              (g.userData.lit ? lamps : poles).push(
+                g
+                  .translate(0.12, -0.6 + j * 1.15, -1.25 + i * 1.25)
+                  .applyMatrix4(m),
+              );
       }
       this.group.add(
         new THREE.Mesh(mergeGeometries(poles)!, darkSteel),
@@ -892,6 +1095,715 @@ export class MemeView {
           mergeGeometries(parts.map((g) => (g.index ? g.toNonIndexed() : g)))!,
           new THREE.MeshStandardMaterial({ color: 0x2a2420, roughness: 0.9 }),
         ),
+      );
+    }
+  }
+
+  /**
+   * The daytime venue dressed as a live event (as in the reveal-night clips): a full crowd on every tier of both
+   * grandstands (the round-2 K cut-outs, turned to the camera), moving-head light beams sweeping from the stand tops
+   * and the ramp tower, a big LED screen on truss legs cycling the stunt titles, and the cannons puffing smoke now and
+   * then. Visual only: the stands and the screen legs are already solid (src/game/venue.ts).
+   */
+  private buildEventDressing(
+    st: Stage,
+    z0: number,
+    darkSteel: THREE.Material,
+    red: THREE.Material,
+  ): void {
+    const fl = st.floor;
+    this.venueMid.copy(W((fl.x0 + fl.x1) / 2, (fl.y0 + fl.y1) / 2, 0));
+    const hash = (i: number) => {
+      const s = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+      return s - Math.floor(s);
+    };
+    // ---- the crowd: rows of people on every tier, a few gaps
+    const tex = [1, 2, 3, 4, 5, 6]
+      .map((i) => this.assets.tex.get("K_0" + i))
+      .filter((t): t is THREE.Texture => !!t);
+    if (tex.length) {
+      const spots: number[][] = tex.map(() => []);
+      let k = 0;
+      const put = (x: number, y: number, z: number) => {
+        k++;
+        if (hash(k) < 0.22) return;
+        spots[Math.floor(hash(k * 7.3) * tex.length)].push(x, y, z);
+      };
+      const { N, D, R } = STANDS;
+      for (const gs of grandstands(fl)) {
+        const b = gs.box;
+        for (let r = 0; r < N; r++) {
+          const z = z0 + (r + 1) * R;
+          if (gs.facing === "north") {
+            const y = b.y1 - r * D - D * 0.6;
+            for (let x = b.x0 + 1; x < b.x1 - 1; x += 0.85 + hash(k) * 0.3)
+              put(x, y, z);
+          } else {
+            const x = b.x1 - r * D - D * 0.6;
+            for (let y = b.y0 + 1; y < b.y1 - 1; y += 0.85 + hash(k) * 0.3)
+              put(x, y, z);
+          }
+        }
+      }
+      tex.forEach((t, v) => {
+        const pos = new Float32Array(spots[v]);
+        const n = pos.length / 3;
+        if (!n) return;
+        const img = t.image as { width: number; height: number };
+        const H = 1.66;
+        const im = new THREE.InstancedMesh(
+          new THREE.PlaneGeometry((H * img.width) / img.height, H).translate(
+            0,
+            H / 2,
+            0,
+          ),
+          new THREE.MeshStandardMaterial({
+            map: t,
+            alphaTest: 0.5,
+            side: THREE.DoubleSide,
+            roughness: 1,
+          }),
+          n,
+        );
+        im.frustumCulled = false;
+        this.group.add(im);
+        this.crowd.push({ im, pos });
+      });
+    }
+    // ---- moving-head beams: a dark fixture with a long additive light shaft, swept every frame (updateEvent)
+    {
+      const c = document.createElement("canvas");
+      c.width = 4;
+      c.height = 128;
+      const g = c.getContext("2d")!;
+      const grad = g.createLinearGradient(0, 0, 0, 128);
+      grad.addColorStop(0, "rgba(255,255,255,0)");
+      grad.addColorStop(0.75, "rgba(255,255,255,0.45)");
+      grad.addColorStop(1, "rgba(255,255,255,1)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 4, 128);
+      const shaftMat = new THREE.MeshBasicMaterial({
+        color: 0xeaf2ff,
+        map: new THREE.CanvasTexture(c),
+        transparent: true,
+        opacity: 0.8,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        fog: false,
+      });
+      const shaft = new THREE.CylinderGeometry(
+        2.6,
+        0.22,
+        70,
+        14,
+        1,
+        true,
+      ).translate(0, 35, 0);
+      const fixture = new THREE.BoxGeometry(0.5, 0.6, 0.5).translate(0, 0.2, 0);
+      const lens = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(3, 3, 3),
+        toneMapped: false,
+      });
+      const add = (
+        x: number,
+        y: number,
+        z: number,
+        yaw0: number,
+        ph: number,
+      ) => {
+        const head = new THREE.Group();
+        head.position.copy(W(x, y, z));
+        head.rotation.order = "YXZ";
+        head.add(
+          new THREE.Mesh(fixture, darkSteel),
+          new THREE.Mesh(
+            new THREE.CircleGeometry(0.2, 10)
+              .rotateX(-Math.PI / 2)
+              .translate(0, 0.51, 0),
+            lens,
+          ),
+          new THREE.Mesh(shaft, shaftMat),
+        );
+        this.group.add(head);
+        this.beams.push({ head, ph, yaw0 });
+      };
+      const { N, D, R } = STANDS;
+      let i = 0;
+      for (const gs of grandstands(fl)) {
+        const b = gs.box;
+        const top = z0 + N * R + 0.4;
+        // along the back rail, aimed out over the floor
+        for (let f = 0.1; f < 0.95; f += 0.2) {
+          if (gs.facing === "north")
+            add(
+              b.x0 + (b.x1 - b.x0) * f,
+              b.y1 - N * D + 0.5,
+              top,
+              Math.PI,
+              i++,
+            );
+          else
+            add(
+              b.x1 - N * D + 0.5,
+              b.y0 + (b.y1 - b.y0) * f,
+              top,
+              Math.PI / 2,
+              i++,
+            );
+        }
+      }
+      // two on the ramp tower's top, swinging out over the run-in (-u)
+      for (const w of [-1, 1]) {
+        const q = rampWorld(st.ramp, RAMP.R + RAMP.TOWER / 2, w * RAMP.HALF);
+        add(
+          q.x,
+          q.y,
+          z0 + RAMP_TOP + 2.4,
+          Math.atan2(-st.ramp.ux, st.ramp.uy),
+          i++,
+        );
+      }
+    }
+    // ---- red LED dash lines on the floor along both sides of the kickflip run-in and the ramp approach
+    {
+      const dashes: THREE.BufferGeometry[] = [];
+      for (const side of [-1, 1]) {
+        for (let s = LANE.s0; s < LANE.s1; s += 3) {
+          const q = stageAt(st, s, side * (LANE.lat - 0.8));
+          dashes.push(boxAt(1.6, 0.05, 0.16, q.x, q.y, z0 + 0.01));
+        }
+        for (let u = -86; u < -2; u += 3) {
+          const q = rampWorld(st.ramp, u, side * (RAMP.HALF + 1.2));
+          dashes.push(
+            new THREE.BoxGeometry(1.6, 0.05, 0.16)
+              .rotateY(Math.atan2(st.ramp.uy, st.ramp.ux))
+              .translate(q.x, z0 + 0.035, -q.y),
+          );
+        }
+      }
+      this.group.add(new THREE.Mesh(mergeGeometries(dashes)!, red));
+    }
+    // ---- the display stage: a low white turntable with red LED rings, a roadster turning on it (updateDemo adds
+    // the car), four spotlights on short masts aimed at it
+    {
+      const ds = displayStage(fl);
+      this.display = ds;
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(ds.r, ds.r + 0.2, ds.h, 48).translate(
+          ds.x,
+          z0 + ds.h / 2,
+          -ds.y,
+        ),
+        new THREE.MeshStandardMaterial({ color: 0xe9ebee, roughness: 0.35 }),
+      );
+      base.receiveShadow = true;
+      const top = new THREE.Mesh(
+        new THREE.CircleGeometry(ds.r - 0.3, 48)
+          .rotateX(-Math.PI / 2)
+          .translate(ds.x, z0 + ds.h + 0.01, -ds.y),
+        new THREE.MeshStandardMaterial({
+          color: 0x15171c,
+          roughness: 0.25,
+          metalness: 0.4,
+        }),
+      );
+      const rings = new THREE.Mesh(
+        mergeGeometries([
+          new THREE.TorusGeometry(ds.r - 0.15, 0.07, 6, 64)
+            .rotateX(Math.PI / 2)
+            .translate(ds.x, z0 + ds.h + 0.03, -ds.y),
+          new THREE.TorusGeometry(ds.r + 0.22, 0.06, 6, 64)
+            .rotateX(Math.PI / 2)
+            .translate(ds.x, z0 + 0.06, -ds.y),
+        ])!,
+        red,
+      );
+      const masts: THREE.BufferGeometry[] = [],
+        heads: THREE.BufferGeometry[] = [];
+      for (let k = 0; k < 4; k++) {
+        const a = Math.PI / 4 + (k * Math.PI) / 2;
+        const x = ds.x + Math.cos(a) * (ds.r + 3.5),
+          y = ds.y + Math.sin(a) * (ds.r + 3.5);
+        masts.push(boxAt(0.18, 4.2, 0.18, x, y, z0));
+        // head turned to the car and tipped down
+        const m = new THREE.Matrix4()
+          .makeRotationY(Math.atan2(ds.y - y, ds.x - x))
+          .multiply(new THREE.Matrix4().makeRotationZ(-0.5))
+          .setPosition(x, z0 + 4.4, -y);
+        for (const g of floodFixture(0.45, 0.55))
+          (g.userData.lit ? heads : masts).push(g.applyMatrix4(m));
+      }
+      this.group.add(
+        base,
+        top,
+        rings,
+        new THREE.Mesh(
+          mergeGeometries(masts.map((g) => (g.index ? g.toNonIndexed() : g)))!,
+          darkSteel,
+        ),
+        new THREE.Mesh(
+          mergeGeometries(heads)!,
+          new THREE.MeshBasicMaterial({
+            color: new THREE.Color(3.2, 3.2, 3.0),
+            toneMapped: false,
+          }),
+        ),
+      );
+    }
+    // ---- the LED screen on two truss legs
+    {
+      const sc = eventScreen(fl);
+      const scr = MT.eventScreenTexture();
+      this.screen = { draw: scr.draw, card: 0 };
+      const g = new THREE.Group();
+      g.position.copy(W(sc.x, sc.y, z0));
+      g.rotation.y = sc.yaw + Math.PI / 2; // the panel's +z face looks along the game heading sc.yaw
+      const face = new THREE.Mesh(
+        new THREE.PlaneGeometry(sc.w, sc.h).translate(0, sc.z + sc.h / 2, 0.36),
+        new THREE.MeshBasicMaterial({ map: scr.tex, toneMapped: false }),
+      );
+      const parts: THREE.BufferGeometry[] = [
+        new THREE.BoxGeometry(sc.w + 0.8, sc.h + 0.8, 0.6).translate(
+          0,
+          sc.z + sc.h / 2,
+          0,
+        ),
+      ];
+      for (const k of [-1, 1]) {
+        parts.push(
+          new THREE.BoxGeometry(0.9, sc.z + sc.h + 1, 0.9).translate(
+            k * (sc.w / 2 - 1),
+            (sc.z + sc.h + 1) / 2,
+            -0.7,
+          ),
+        );
+        parts.push(
+          new THREE.BoxGeometry(2.2, 0.1, 2.2).translate(
+            k * (sc.w / 2 - 1),
+            0.05,
+            -0.7,
+          ),
+        );
+      }
+      const frame = new THREE.Mesh(mergeGeometries(parts)!, darkSteel);
+      frame.castShadow = true;
+      g.add(frame, face);
+      this.group.add(g);
+    }
+  }
+
+  /**
+   * A generic two-stage rocket (white, a black interstage, grid fins, a cluster of engine bells, no markings) on a
+   * concrete pad by the run-in, with an umbilical tower. It lifts off when the player comes down off the ramp
+   * (celebrate), and a fresh one stands on the pad again 45 s later (updateRocket).
+   */
+  private buildRocket(
+    st: Stage,
+    z0: number,
+    steel: THREE.Material,
+    darkSteel: THREE.Material,
+  ): void {
+    const lp = launchPad(st.floor);
+    const concrete = new THREE.MeshStandardMaterial({
+      color: 0x8e9095,
+      roughness: 0.95,
+    });
+    const pad = new THREE.Mesh(
+      mergeGeometries([
+        boxAt(2 * lp.half, 0.6, 2 * lp.half, lp.x, lp.y, z0),
+        boxAt(4.2, 0.62, 4.2, lp.x, lp.y, z0), // the darker flame deflector plate, painted in below
+      ])!,
+      concrete,
+    );
+    pad.receiveShadow = true;
+    const scorch = new THREE.Mesh(
+      new THREE.CircleGeometry(3.4, 32)
+        .rotateX(-Math.PI / 2)
+        .translate(lp.x, z0 + 0.63, -lp.y),
+      new THREE.MeshStandardMaterial({ color: 0x2a2826, roughness: 1 }),
+    );
+    this.group.add(pad, scorch);
+    // the umbilical tower: a square truss on the north side, two swing arms reaching to the rocket
+    {
+      const parts: THREE.BufferGeometry[] = [];
+      const tx = lp.x,
+        ty = lp.y + lp.half + 1.6,
+        H = 36,
+        w = 1.1;
+      for (const sx of [-1, 1])
+        for (const sy of [-1, 1])
+          parts.push(boxAt(0.25, H, 0.25, tx + sx * w, ty + sy * w, z0));
+      for (let z = 0; z < H; z += 2.4)
+        for (const sy of [-1, 1]) {
+          parts.push(boxAt(2 * w, 0.14, 0.14, tx, ty + sy * w, z0 + z));
+          parts.push(boxAt(0.14, 0.14, 2 * w, tx + sy * w, ty, z0 + z));
+        }
+      for (const z of [21, 29])
+        parts.push(
+          boxAt(
+            0.6,
+            0.5,
+            lp.half - 0.6,
+            tx,
+            ty - (lp.half + 1.6) / 2 - 0.4,
+            z0 + z,
+          ),
+        );
+      const tower = new THREE.Mesh(mergeGeometries(parts)!, darkSteel);
+      tower.castShadow = true;
+      this.group.add(tower);
+    }
+    // the rocket: base on the pad, +y up; the body group is what flies
+    const white = new THREE.MeshStandardMaterial({
+      color: 0xf1f2f4,
+      roughness: 0.4,
+      metalness: 0.1,
+    });
+    const black = new THREE.MeshStandardMaterial({
+      color: 0x15161a,
+      roughness: 0.5,
+    });
+    const R = 1.7;
+    const body = new THREE.Group();
+    const whites = [
+      new THREE.CylinderGeometry(R, R, 16, 28).translate(0, 1.4 + 8, 0),
+      new THREE.CylinderGeometry(R, R, 9, 28).translate(0, 18.6 + 4.5, 0),
+      new THREE.ConeGeometry(R, 6.5, 28).translate(0, 27.6 + 3.25, 0),
+    ];
+    const blacks: THREE.BufferGeometry[] = [
+      new THREE.CylinderGeometry(R + 0.02, R + 0.02, 1.2, 28).translate(
+        0,
+        17.4 + 0.6,
+        0,
+      ),
+      new THREE.CylinderGeometry(R + 0.03, R + 0.03, 0.6, 28).translate(
+        0,
+        1.4 + 0.3,
+        0,
+      ),
+    ];
+    for (let k = 0; k < 4; k++) {
+      const a = (k * Math.PI) / 2 + Math.PI / 4;
+      // grid fins near the top of the first stage, landing legs folded along the base
+      blacks.push(
+        new THREE.BoxGeometry(1.1, 0.9, 0.08)
+          .translate(R + 0.5, 16.4, 0)
+          .rotateY(a),
+        new THREE.BoxGeometry(0.22, 5.2, 0.5)
+          .translate(R + 0.12, 4.2, 0)
+          .rotateY(a + Math.PI / 4),
+      );
+    }
+    const bells: THREE.BufferGeometry[] = [
+      new THREE.CylinderGeometry(0.32, 0.55, 1.4, 14, 1, true).translate(
+        0,
+        0.7,
+        0,
+      ),
+    ];
+    for (let k = 0; k < 6; k++) {
+      const a = (k * Math.PI) / 3;
+      bells.push(
+        new THREE.CylinderGeometry(0.28, 0.48, 1.3, 12, 1, true).translate(
+          Math.cos(a) * 1.05,
+          0.65,
+          Math.sin(a) * 1.05,
+        ),
+      );
+    }
+    const bodyMesh = new THREE.Mesh(mergeGeometries(whites)!, white);
+    bodyMesh.castShadow = true;
+    body.add(
+      bodyMesh,
+      new THREE.Mesh(
+        mergeGeometries(blacks.map((g) => (g.index ? g.toNonIndexed() : g)))!,
+        black,
+      ),
+      new THREE.Mesh(mergeGeometries(bells)!, steel),
+    );
+    // the exhaust flame: an additive cone hanging under the engines, shown while it burns
+    const c = document.createElement("canvas");
+    c.width = 4;
+    c.height = 128;
+    const g = c.getContext("2d")!;
+    const grad = g.createLinearGradient(0, 0, 0, 128);
+    grad.addColorStop(0, "rgba(255,240,210,1)");
+    grad.addColorStop(0.35, "rgba(255,190,110,0.85)");
+    grad.addColorStop(1, "rgba(255,120,40,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 4, 128);
+    const flame = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.5, 2.6, 18, 18, 1, true).translate(0, -9, 0),
+      new THREE.MeshBasicMaterial({
+        map: new THREE.CanvasTexture(c),
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+        color: new THREE.Color(2.2, 1.8, 1.4),
+      }),
+    );
+    flame.visible = false;
+    body.add(flame);
+    const base = W(lp.x, lp.y, z0 + 0.62);
+    body.position.copy(base);
+    this.group.add(body);
+    this.rocket = { body, flame, base };
+  }
+
+  /** a rocket stands on the pad, ready */
+  private standRocket(): void {
+    const r = this.rocket;
+    this.rocketT = -1;
+    this.shotSkipped = false;
+    if (!r) return;
+    r.body.position.copy(r.base);
+    r.body.rotation.set(0, 0, 0);
+    r.body.visible = true;
+    r.flame.visible = false;
+  }
+
+  /** A new run: no cheering carried over from the last one, and a rocket back on the pad. */
+  resetRun(): void {
+    this.cheerT = -99;
+    this.standRocket();
+  }
+
+  /** The player skipped the liftoff shot: back to the chase camera for the rest of this launch. */
+  skipShot(): void {
+    if (this.rocketT >= 0) this.shotSkipped = true;
+  }
+
+  /** the launch: ignition and a hold on the pad in a wall of smoke, a slow climb that speeds up and pitches east */
+  private updateRocket(t: number, fx: Particles): void {
+    const r = this.rocket;
+    if (!r) return;
+    if (this.rocketT < 0) return;
+    const tau = t - this.rocketT;
+    if (tau > 45) {
+      // a fresh one has been stood up on the pad
+      this.standRocket();
+      return;
+    }
+    const rise = Math.max(0, tau - ROCKET_HOLD);
+    // slow off the pad, picking up speed (~30 m up by the end of the liftoff shot), then away
+    const z = 2.4 * rise ** 2.1;
+    const tilt = Math.min(0.6, 0.008 * rise * rise);
+    r.body.position.set(
+      r.base.x + Math.sin(tilt) * z * 0.5,
+      r.base.y + z,
+      r.base.z,
+    );
+    r.body.rotation.z = -tilt;
+    const burning = tau < 22;
+    r.flame.visible = burning;
+    r.body.visible = tau < 26;
+    if (!burning) return;
+    r.flame.scale.set(
+      1 + 0.08 * Math.sin(t * 47),
+      1 + Math.min(1.2, rise * 0.25) + 0.15 * Math.sin(t * 31),
+      1 + 0.08 * Math.sin(t * 53),
+    );
+    // the nozzle, in the world (the body leans about its base)
+    this.nozzle.set(Math.sin(tilt) * -0.5, -0.4, 0).add(r.body.position);
+    if (tau < 4.5) {
+      // the pad disappears in a rolling bank of smoke
+      for (let i = 0; i < 6; i++) {
+        const a = Math.random() * Math.PI * 2;
+        fx.emit(
+          this.v
+            .copy(r.base)
+            .add(this.sc.set(Math.cos(a) * 2, 0.6, Math.sin(a) * 2)),
+          this.sc.set(
+            Math.cos(a) * (8 + Math.random() * 8),
+            1 + Math.random() * 2,
+            Math.sin(a) * (8 + Math.random() * 8),
+          ),
+          3.5 + Math.random() * 2.5,
+          6 + Math.random() * 5,
+          EXHAUST,
+          { drag: 1.1, grav: -0.25, spread: 1.5 },
+        );
+      }
+    }
+    if (rise > 0)
+      for (let i = 0; i < 2; i++)
+        fx.emit(
+          this.nozzle,
+          this.sc.set(
+            (Math.random() - 0.5) * 2,
+            -6 - Math.random() * 4,
+            (Math.random() - 0.5) * 2,
+          ),
+          2.5 + Math.random() * 1.5,
+          4 + Math.min(6, rise * 0.6),
+          EXHAUST,
+          { drag: 1.4, grav: -0.1, spread: 1.2 },
+        );
+  }
+
+  /**
+   * The liftoff shot while a launch is on (ROCKET_SHOT s after it): a camera low on the floor north-east of the pad,
+   * the stands behind the rocket, looking up at it and following it off the pad. Fills pos / look, or returns false.
+   */
+  rocketShot(t: number, pos: THREE.Vector3, look: THREE.Vector3): boolean {
+    const r = this.rocket;
+    if (!r || this.rocketT < 0 || this.shotSkipped) return false;
+    const tau = t - this.rocketT;
+    const [t0, t1] = ROCKET_SHOT;
+    if (tau < t0 || tau > t1) return false;
+    const k = (tau - t0) / (t1 - t0);
+    // game (+38, +30) from the pad = world (+38, -30), just short of the kickflip run-in's barriers; rising a little
+    pos.copy(r.base).add(this.shotOff.set(38, 1.4 + 2.6 * k, -30));
+    look.copy(r.body.position).add(this.shotOff.set(0, 13, 0));
+    return true;
+  }
+
+  /**
+   * The player came down off the ramp: the stands jump and roar, the beams swing onto the car, the screen says so,
+   * confetti and smoke go off, and (if one is standing) the rocket beside the run-in lifts off. Returns whether it did.
+   */
+  celebrate(
+    x: number,
+    y: number,
+    t: number,
+    big: boolean,
+    fx: Particles,
+    /** a second flip off the top, landed */
+    extraFlip = false,
+  ): boolean {
+    this.cheerT = t;
+    this.cheerAt = { x, y };
+    this.cheerBig = big;
+    this.cheerCard = extraFlip ? 5 : big ? 3 : 4;
+    this.crowdCam.set(1e9, 0, 0); // re-pose the crowd this frame
+    this.cannonBlast(fx);
+    gasCloud(fx, W(x, y, C.CURB_H), big ? 160 : 90, 3.2, 1.6);
+    // confetti off the stand tops and over the car
+    const st = this.city.stage;
+    if (st) {
+      const spots = grandstands(st.floor).map((g) => ({
+        x: (g.box.x0 + g.box.x1) / 2,
+        y: (g.box.y0 + g.box.y1) / 2,
+        z: STANDS.N * STANDS.R + 2,
+      }));
+      spots.push({ x, y, z: 9 });
+      for (const s of spots)
+        for (let i = 0; i < (big ? 70 : 35); i++)
+          fx.emit(
+            W(
+              s.x + (Math.random() - 0.5) * 14,
+              s.y + (Math.random() - 0.5) * 14,
+              s.z,
+            ),
+            this.v.set(
+              (Math.random() - 0.5) * 6,
+              4 + Math.random() * 7,
+              (Math.random() - 0.5) * 6,
+            ),
+            3.2 + Math.random() * 1.5,
+            0.45,
+            CONFETTI[i % CONFETTI.length],
+            { drag: 1.2, grav: 1.6, spread: 2.5 },
+          );
+    }
+    if (this.rocket && this.rocketT < 0) {
+      this.rocketT = t;
+      return true;
+    }
+    return false;
+  }
+
+  /** per frame: the crowd turns to the camera (when it moved), the beams sweep, the screen cycles, smoke now and then */
+  private updateEvent(t: number, cam: THREE.Vector3, fx: Particles): void {
+    const near = cam.distanceTo(this.venueMid) < 420;
+    for (const c of this.crowd) c.im.visible = near;
+    for (const b of this.beams) b.head.visible = near;
+    if (!near) return;
+    const cheer = t - this.cheerT;
+    const jumping = cheer < 4.5;
+    if (
+      this.crowd.length &&
+      (jumping || cam.distanceToSquared(this.crowdCam) > 4)
+    ) {
+      this.crowdCam.copy(cam);
+      // on their feet and jumping after a ride over the ramp, settling over 4.5 s
+      const env = jumping
+        ? (this.cheerBig ? 0.45 : 0.25) * (1 - cheer / 4.5)
+        : 0;
+      for (const { im, pos } of this.crowd) {
+        for (let i = 0, n = pos.length / 3; i < n; i++) {
+          const x = pos[i * 3],
+            y = pos[i * 3 + 1];
+          const hop = env ? env * Math.abs(Math.sin(t * 9 + i * 1.7)) : 0;
+          this.q.setFromAxisAngle(UP_Y, Math.atan2(cam.x - x, cam.z + y));
+          this.m.compose(this.v.set(x, pos[i * 3 + 2] + hop, -y), this.q, ONE);
+          im.setMatrixAt(i, this.m);
+        }
+        im.instanceMatrix.needsUpdate = true;
+      }
+    }
+    // a crown of light over the car: every beam meets 30 m above it (aimed at the car itself they lay grey wedges
+    // across the floor); through the liftoff shot they follow the rocket up instead
+    const onRocket =
+      !!this.rocket && this.rocketT >= 0 && t - this.rocketT < ROCKET_SHOT[1];
+    const aimed = cheer < 4 || onRocket;
+    const aim = onRocket
+      ? this.beamAim.copy(this.rocket!.body.position).add(this.v.set(0, 22, 0))
+      : W(this.cheerAt.x, this.cheerAt.y, C.CURB_H + 30);
+    for (const b of this.beams) {
+      if (aimed) {
+        // every head swings over onto the car that just came down
+        const d = this.sc.copy(aim).sub(b.head.position).normalize();
+        b.head.rotation.set(Math.acos(d.y), Math.atan2(d.x, d.z), 0);
+        continue;
+      }
+      // a slow figure-of-eight over the floor, each head out of step with the next
+      b.head.rotation.set(
+        0.55 + 0.32 * Math.sin(t * 0.43 + b.ph * 1.7),
+        b.yaw0 + 0.75 * Math.sin(t * 0.31 + b.ph * 0.9),
+        0,
+      );
+    }
+    if (this.screen) {
+      const card = cheer < 5 ? this.cheerCard : Math.floor(t / 4) % 3;
+      if (card !== this.screen.card) {
+        this.screen.card = card;
+        this.screen.draw(card);
+      }
+    }
+    if (t - this.smokeT > 7) {
+      this.smokeT = t;
+      this.cannonBlast(fx);
+    }
+    // a standing haze, as on the night: slow, big, low puffs drifting off the row, the ramp foot and the stage
+    if (t - this.hazeT > 0.3 && this.city.stage) {
+      this.hazeT = t;
+      const st = this.city.stage;
+      const spots = [
+        stageAt(st, st.rowS - ROW_HALF - 4, 0),
+        stageAt(st, st.rowS + ROW_HALF + 4, 0),
+        rampWorld(st.ramp, 2, 0),
+      ];
+      if (this.display) spots.push(this.display);
+      const s = spots[Math.floor(t / 0.3) % spots.length];
+      fx.emit(
+        W(
+          s.x + (Math.random() - 0.5) * 6,
+          s.y + (Math.random() - 0.5) * 6,
+          C.CURB_H + 0.4,
+        ),
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 1.2,
+          0.25 + Math.random() * 0.3,
+          (Math.random() - 0.5) * 1.2,
+        ),
+        4.5,
+        5.5 + Math.random() * 2,
+        JET,
+        { drag: 0.4, grav: -0.02 },
       );
     }
   }
@@ -939,13 +1851,34 @@ export class MemeView {
       const a = stageAt(st, LANE.s0, side * LANE.lat),
         b = stageAt(st, LANE.s1, side * LANE.lat);
       const len = b.x - a.x;
-      frames.push(boxAt(len, 0.9, 0.05, (a.x + b.x) / 2, a.y, z0 + 0.12));
-      frames.push(
-        boxAt(len, 0.06, 0.08, (a.x + b.x) / 2, a.y, z0 + LANE.h - 0.06),
-      );
+      // round-5 EV_02: four 2.4 m mesh sections per tile, cut post to post, so the posts land every 2.4 m
+      const ev2 = this.assets.tex.get("EV_02");
+      if (ev2) {
+        const g = new THREE.PlaneGeometry(len, LANE.h);
+        const uv = g.attributes.uv as THREE.BufferAttribute;
+        for (let i = 0; i < uv.count; i++) uv.setX(i, (uv.getX(i) * len) / 9.6);
+        g.translate((a.x + b.x) / 2, z0 + LANE.h / 2, -a.y);
+        this.group.add(
+          new THREE.Mesh(
+            g,
+            new THREE.MeshStandardMaterial({
+              map: ev2,
+              alphaTest: 0.3,
+              side: THREE.DoubleSide,
+              roughness: 0.6,
+              metalness: 0.3,
+            }),
+          ),
+        );
+      } else {
+        frames.push(boxAt(len, 0.9, 0.05, (a.x + b.x) / 2, a.y, z0 + 0.12));
+        frames.push(
+          boxAt(len, 0.06, 0.08, (a.x + b.x) / 2, a.y, z0 + LANE.h - 0.06),
+        );
+      }
       for (let s = LANE.s0; s <= LANE.s1; s += 2.4) {
         const q = stageAt(st, s, side * LANE.lat);
-        frames.push(boxAt(0.06, LANE.h, 0.06, q.x, q.y, z0));
+        if (!ev2) frames.push(boxAt(0.06, LANE.h, 0.06, q.x, q.y, z0));
         frames.push(boxAt(0.08, 0.05, 0.7, q.x, q.y, z0));
       }
       for (let s = LANE.s0 + 2, k = 0; s < LANE.s1 + 8; s += 6, k++) {
@@ -960,44 +1893,56 @@ export class MemeView {
     this.cannons = [];
     for (const sx of [-1, 1]) {
       const x = c.x + sx * (PLINTH.halfS + 3);
-      for (const dy of [-1.3, 1.3])
-        frames.push(boxAt(0.12, 2.4, 0.12, x, c.y + dy, z0));
-      frames.push(boxAt(0.14, 0.14, 2.8, x, c.y, z0 + 2.3));
+      // as the round-5 EV_05 rig: a box-truss goalpost on base plates, eight par cans in two rows of four under
+      // the top bar, aimed at the row
+      for (const dy of [-1.4, 1.4]) {
+        frames.push(boxAt(0.24, 2.6, 0.24, x, c.y + dy, z0));
+        frames.push(boxAt(0.6, 0.03, 0.6, x, c.y + dy, z0));
+      }
+      frames.push(boxAt(0.24, 0.24, 3.04, x, c.y, z0 + 2.5));
       for (let i = 0; i < 4; i++)
-        for (let j = 0; j < 2; j++)
-          whites.push(
-            boxAt(
-              0.35,
-              0.35,
-              0.12,
-              x - 0.0,
-              c.y - 1.05 + i * 0.7,
-              z0 + 1.35 + j * 0.55,
-            ).translate(0, 0, -0.1),
+        for (let j = 0; j < 2; j++) {
+          const m = new THREE.Matrix4()
+            .makeRotationY(sx > 0 ? Math.PI : 0)
+            .multiply(new THREE.Matrix4().makeRotationZ(-0.25))
+            .setPosition(x, z0 + 2.3 - j * 0.42, -(c.y - 0.99 + i * 0.66));
+          frames.push(
+            new THREE.CylinderGeometry(0.13, 0.11, 0.28, 10)
+              .rotateZ(-Math.PI / 2)
+              .applyMatrix4(m),
           );
+          whites.push(
+            new THREE.CircleGeometry(0.11, 12)
+              .rotateY(Math.PI / 2)
+              .translate(0.145, 0, 0)
+              .applyMatrix4(m),
+          );
+        }
+      // as the round-5 EV_04 cannon: a barrel with a flared nozzle on a tilting tripod, blowing along the row
       const cy = c.y - PLINTH.halfLat - 1.5;
-      frames.push(
-        new THREE.CylinderGeometry(0.28, 0.32, 1.1, 10)
-          .rotateZ(Math.PI / 2 - sx * 0.6)
-          .translate(x - sx * 1.5, z0 + 1.1, -cy),
-      );
-      frames.push(boxAt(0.1, 0.8, 0.1, x - sx * 1.5, cy, z0));
+      const cm = new THREE.Matrix4()
+        .makeRotationY(sx > 0 ? Math.PI : 0)
+        .setPosition(x - sx * 1.5, z0, -cy);
+      for (const g of smokeCannon()) frames.push(g.applyMatrix4(cm));
       this.cannons.push({ x: x - sx * 1.5, y: cy, dir: -sx });
     }
     {
       const x = c.x + 7,
         y = c.y - 10;
       frames.push(boxAt(0.4, 13, 0.4, x, y, z0));
-      frames.push(boxAt(0.3, 1.8, 3.2, x, y, z0 + 13));
+      frames.push(boxAt(0.16, 1.9, 3.3, x, y, z0 + 13));
+      // facing the row (-x): local +x of the fixtures turned to -x in the world
+      const m = new THREE.Matrix4()
+        .makeRotationY(Math.PI)
+        .setPosition(x - 0.1, z0 + 13.95, -y);
       for (let i = 0; i < 3; i++)
         for (let j = 0; j < 2; j++)
-          whites.push(
-            boxAt(0.12, 0.7, 0.85, x, y + 0.2, z0 + 13.2 + j * 0.85).translate(
-              0,
-              0,
-              (i - 1) * 1.0,
-            ),
-          );
+          for (const g of floodFixture(0.7, 0.88))
+            (g.userData.lit ? whites : frames).push(
+              g
+                .translate(0.12, -0.43 + j * 0.86, (i - 1) * 1.0)
+                .applyMatrix4(m),
+            );
     }
     this.group.add(
       new THREE.Mesh(mergeGeometries(leds)!, red),
@@ -1013,7 +1958,13 @@ export class MemeView {
       const g = new THREE.Group();
       g.position.copy(W(q.x, q.y, top));
       g.rotation.y = yaw + Math.PI / 2; // broadside to the run-in, nose to the road
-      if (v.kind === "semi") g.add(semiTractor());
+      if (v.kind === "semi")
+        g.add(
+          semiTractor(
+            this.assets.tex.get("SM_01"),
+            this.assets.tex.get("SM_03"),
+          ),
+        );
       else {
         const model = this.assets.models.get(KIND_MODEL[v.kind]);
         if (!model) return;
@@ -1039,9 +1990,10 @@ export class MemeView {
   }
 
   /**
-   * The hook ramp: a concrete ribbon along the profile in src/game/venue.ts (flat apron, quarter pipe, vertical, the
-   * curl over the run-in) with red LED strips on both edges and a white centre line, posts under the curve, a truss
-   * tower behind the wall and a truss boom out over the curl.
+   * The hook ramp: a pale concrete slab along the profile in src/game/venue.ts (flat apron, a broad quarter pipe filled
+   * solid to the floor, a short vertical, the long lean back over the run-in) with red LED strips on both edges and a
+   * white centre line; a truss tower as wide as the wall right behind it, and a light boom from its top out to the
+   * lip with hangers down to the lean-back.
    */
   private buildRamp(
     st: Stage,
@@ -1105,8 +2057,9 @@ export class MemeView {
     const surface = new THREE.Mesh(
       ribbon(-HALF, HALF, 0, false),
       new THREE.MeshStandardMaterial({
-        color: 0xd6d6d2,
+        color: 0xe8e8e4, // pale, freshly cast concrete, bright as on the night
         map: conc ?? null,
+        emissive: 0x3e3c38, // floodlit warm white: the face glows as in the clips, never goes dark
         roughness: 0.85,
         side: THREE.DoubleSide,
       }),
@@ -1119,7 +2072,7 @@ export class MemeView {
         ribbon(HALF, HALF, 0, false, 0.55),
       ])!,
       new THREE.MeshStandardMaterial({
-        color: 0x9a9a96,
+        color: 0xb4b4b0,
         roughness: 0.9,
         side: THREE.DoubleSide,
       }),
@@ -1137,7 +2090,45 @@ export class MemeView {
       red,
     );
     this.group.add(surface, back, centre, edges);
-    // ---- steel: posts under the curve, the truss tower behind the wall, a truss boom out over the curl
+    // ---- the foot filled solid down to the floor (a concrete quarter pipe, as the wall stands on the night)
+    {
+      const sh = new THREE.Shape();
+      sh.moveTo(-0.01, 0);
+      for (let i = 0; i <= 24; i++) {
+        const q = (i / 24) * (Math.PI / 2);
+        sh.lineTo(R * Math.sin(q), R * (1 - Math.cos(q)) - 0.02);
+      }
+      sh.lineTo(R + 0.5, R);
+      sh.lineTo(R + 0.5, 0);
+      sh.closePath();
+      const g = new THREE.ExtrudeGeometry(sh, {
+        depth: 2 * HALF,
+        bevelEnabled: false,
+        curveSegments: 1,
+      }).translate(0, 0, -HALF);
+      // local (u, z, w) -> world; w is the ramp's left
+      const o = P(0, 0, 0);
+      g.applyMatrix4(
+        new THREE.Matrix4().makeBasis(
+          new THREE.Vector3(r.ux, 0, -r.uy),
+          new THREE.Vector3(0, 1, 0),
+          new THREE.Vector3(-r.uy, 0, -r.ux),
+        ),
+      ).translate(o.x, o.y, o.z);
+      const fill = new THREE.Mesh(
+        g,
+        new THREE.MeshStandardMaterial({
+          color: 0xb4b4b0,
+          map: conc ?? null,
+          roughness: 0.9,
+          side: THREE.DoubleSide,
+        }),
+      );
+      fill.castShadow = fill.receiveShadow = true;
+      this.group.add(fill);
+    }
+    // ---- steel: a truss tower right behind the wall, as wide as it, and a boom from its top out to the lip with
+    // hangers down to the lean-back (the curl hangs off it, as on the night; no gantry far beyond the lip)
     const parts: THREE.BufferGeometry[] = [];
     const up = new THREE.Vector3(0, 1, 0);
     const bar = (a: THREE.Vector3, b: THREE.Vector3, t = 0.22) => {
@@ -1150,14 +2141,10 @@ export class MemeView {
       ).translate((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
       parts.push(g);
     };
-    const curve = (u: number) => R - Math.sqrt(R * R - u * u);
-    for (const u of [3.5, 5, 6.5, 7.8, 8.8, 9.5])
-      for (const w of [-HALF + 0.3, HALF - 0.3])
-        bar(P(u + 0.35, w, 0), P(u + 0.35, w, curve(u) - 0.4), 0.25);
-    const top = RAMP_TOP + 2;
+    const top = RAMP_TOP + 1;
     const u0 = R + 0.6,
       u1 = R + TOWER,
-      wt = HALF + 1;
+      wt = HALF - 0.2;
     for (const u of [u0, u1])
       for (const w of [-wt, wt]) bar(P(u, w, 0), P(u, w, top), 0.4);
     for (let z = 0; z < top - 0.5; z += 2.6) {
@@ -1171,20 +2158,33 @@ export class MemeView {
         bar(P(u, -wt, z), P(u, wt, z1), 0.14);
       }
     }
-    // the boom: two chords each side from the tower top out over the curl, verticals and diagonals between
+    // the boom: two light chords each side from the tower top out to just behind the lip, verticals and diagonals
+    // between, and hangers from its bottom chords down to the back of the lean-back
+    const lip = rampPoint(RAMP_END);
     const b0 = u1,
-      b1 = R - RAMP.r - 3;
+      b1 = lip.u - 0.4,
+      bh = 1.8; // deep enough to carry the long arm
+    const step = (b0 - b1) / Math.max(1, Math.round((b0 - b1) / 2.2));
     for (const w of [-wt, wt]) {
-      bar(P(b0, w, top), P(b1, w, top), 0.3);
-      bar(P(b0, w, top + 1.8), P(b1, w, top + 1.8), 0.3);
-      for (let u = b1; u <= b0 + 0.01; u += 2.4) {
-        bar(P(u, w, top), P(u, w, top + 1.8), 0.16);
-        if (u + 2.4 <= b0 + 0.01)
-          bar(P(u, w, top), P(u + 2.4, w, top + 1.8), 0.12);
+      bar(P(b0, w, top), P(b1, w, top), 0.24);
+      bar(P(b0, w, top + bh), P(b1, w, top + bh), 0.24);
+      for (let u = b1; u <= b0 + 0.01; u += step) {
+        bar(P(u, w, top), P(u, w, top + bh), 0.14);
+        if (u + step <= b0 + 0.01)
+          bar(P(u, w, top), P(u + step, w, top + bh), 0.1);
       }
     }
-    for (let u = b1; u <= b0 + 0.01; u += 4.8)
-      bar(P(u, -wt, top + 1.8), P(u, wt, top + 1.8), 0.16);
+    for (let u = b1; u <= b0 + 0.01; u += 2 * step)
+      bar(P(u, -wt, top + bh), P(u, wt, top + bh), 0.14);
+    const sCurl = (R * Math.PI) / 2 + RAMP.VERT;
+    for (const f of [0.25, 0.45, 0.6, 0.72, 0.84, 0.98]) {
+      const q = rampPoint(sCurl + (RAMP_END - sCurl) * f);
+      const bu = q.u + Math.sin(q.th) * 0.55,
+        bz = q.z - Math.cos(q.th) * 0.55; // the slab's back face
+      if (top - bz < 0.4) continue;
+      for (const w of [-wt + 0.3, wt - 0.3])
+        bar(P(bu, w, bz), P(bu, w, top), 0.08);
+    }
     const steelMesh = new THREE.Mesh(mergeGeometries(parts)!, steel);
     steelMesh.castShadow = true;
     this.group.add(steelMesh);
@@ -1406,9 +2406,59 @@ export class MemeView {
       }
       // fascia toward each approach: lane signals (green arrows over the lanes coming in, red crosses over the
       // other direction's) either side of a TOLL panel
+      const tp1 = this.assets.tex.get("TP_01");
+      const tp1Img = tp1?.image as
+        (CanvasImageSource & { width: number; height: number }) | undefined;
       const fascia = MT.tollFasciaTexture(
         Array.from({ length: C.LANES_PER_DIR }, (_, k) => C.laneOffset(k) / cw),
+        tp1Img,
       );
+      // round-5 TP_01 on the two short sides too, and the TP_02 soffit (a 7 m grid of panels with LED fittings)
+      // under the whole canopy, seen when driving under it and when flying over it upside down
+      if (tp1 && tp1Img) {
+        const h = P.top - P.bottom;
+        const tileW = (2 * h * tp1Img.width) / tp1Img.height;
+        for (const sy of [-1, 1]) {
+          const g = new THREE.PlaneGeometry(cd, h);
+          const uv = g.attributes.uv as THREE.BufferAttribute;
+          for (let i = 0; i < uv.count; i++)
+            uv.setX(i, (uv.getX(i) * cd) / tileW);
+          if (sy > 0) g.rotateY(Math.PI);
+          g.translate(
+            tl.x,
+            (P.bottom + P.top) / 2,
+            -(tl.y + sy * (cw / 2 + 0.02)),
+          );
+          this.group.add(
+            new THREE.Mesh(
+              g,
+              new THREE.MeshStandardMaterial({ map: tp1, roughness: 0.5 }),
+            ),
+          );
+        }
+      }
+      const tp2 = this.assets.tex.get("TP_02");
+      if (tp2) {
+        tp2.wrapT = THREE.RepeatWrapping;
+        tp2.needsUpdate = true;
+        const g = new THREE.PlaneGeometry(cd, cw).rotateX(Math.PI / 2);
+        const uv = g.attributes.uv as THREE.BufferAttribute;
+        for (let i = 0; i < uv.count; i++)
+          uv.setXY(i, (uv.getX(i) * cd) / 7, (uv.getY(i) * cw) / 7);
+        g.translate(tl.x, P.bottom - 0.02, -tl.y);
+        this.group.add(
+          new THREE.Mesh(
+            g,
+            new THREE.MeshStandardMaterial({
+              map: tp2,
+              emissive: 0xffffff,
+              emissiveMap: tp2,
+              emissiveIntensity: 0.25,
+              roughness: 0.7,
+            }),
+          ),
+        );
+      }
       for (const sx of [-1, 1]) {
         const f = new THREE.Mesh(
           new THREE.PlaneGeometry(cw, P.top - P.bottom),
@@ -1495,6 +2545,46 @@ export class MemeView {
     const site = martSite(this.city); // shared with the collision layout (src/game/landmarks.ts)
     if (!site) return;
     const { cx, ey, south } = site;
+    // the CART RETURN bay on the forecourt (session.ts fills the tank there once a run): paint on the ground, readable
+    // from the avenue, and a post sign at its road-side corner
+    {
+      const cr = cartReturn(site);
+      const tex = MT.cartReturnTexture();
+      const bay = new THREE.Mesh(
+        new THREE.PlaneGeometry(cr.x1 - cr.x0, cr.y1 - cr.y0),
+        new THREE.MeshStandardMaterial({
+          map: tex,
+          transparent: true,
+          depthWrite: false,
+          roughness: 0.8,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+        }),
+      );
+      bay.rotation.set(-Math.PI / 2, 0, south ? 0 : Math.PI);
+      bay.position.copy(
+        W((cr.x0 + cr.x1) / 2, (cr.y0 + cr.y1) / 2, C.CURB_H + 0.03),
+      );
+      this.group.add(bay);
+      const sy = south ? cr.y0 : cr.y1; // the edge toward the avenue
+      const sign = signPlane(MT.cartReturnTexture(true), 2.2, 2.2, 0.5);
+      sign.position.copy(W(cr.x1 + 0.6, sy, C.CURB_H + 3.0));
+      sign.rotation.y = south ? 0 : Math.PI; // faces the avenue (a plane faces world +z = game -y)
+      this.group.add(
+        sign,
+        new THREE.Mesh(
+          boxAt(
+            0.12,
+            4.1,
+            0.12,
+            cr.x1 + 0.6,
+            sy + (south ? 0.08 : -0.08),
+            C.CURB_H,
+          ),
+          new THREE.MeshStandardMaterial({ color: 0x444a52, roughness: 0.6 }),
+        ),
+      );
+    }
     const front = this.assets.tex.get("MT_01");
     if (front) {
       // round-4 MT_01 store front on a 30 x 16 x 12.3 m box (solid in game), facing the avenue
@@ -1631,13 +2721,28 @@ export class MemeView {
       mat.fog = false;
       g.add(new THREE.Mesh(p.geometry, mat));
     });
-    // suited mannequin in the driver's seat, one arm on the door
+    // suited mannequin in the driver's seat: the round-5 MQ_01 cut-out, always turned to the camera (fallback: a
+    // capsule body, helmet and an arm on the door)
+    const H = model.size.y;
+    const mq = this.assets.tex.get("MQ_01");
+    if (mq) {
+      const im = mq.image as { width: number; height: number };
+      const s = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: mq, alphaTest: 0.5, fog: false }),
+      );
+      s.scale.set((1.25 * im.width) / im.height, 1.25, 1);
+      s.position.set(-0.3, H * 0.62 + 0.45, 0.32);
+      g.add(s);
+      g.scale.setScalar(13);
+      this.orbit = g;
+      this.group.add(g);
+      return;
+    }
     const suit = new THREE.MeshStandardMaterial({
       color: 0xf1f1f1,
       roughness: 0.6,
       fog: false,
     });
-    const H = model.size.y;
     const torso = new THREE.Mesh(
       new THREE.CapsuleGeometry(0.24, 0.42, 4, 10),
       suit,
@@ -1786,17 +2891,30 @@ export class MemeView {
     if (emit) this.puffT = t;
     const f = this.fleet;
     if (f) {
-      f.begin();
+      f.begin(cam.x, cam.z);
       for (const s of this.statics) f.add(s.x, s.y, s.hc, s.heading, s.color);
       this.updateSky(f, simT, cam, fx, emit);
       this.updateDemo(f, t, cam, px, py, fx);
+      const ds = this.display;
+      if (ds) f.add(ds.x, ds.y, C.CURB_H + ds.h + f.H / 2, t * 0.35, 0xe9ecef);
       f.end();
     }
     this.updateCarts(t, cam, fx);
     this.updateBoosters(t, cam, fx);
-    const pulse = 1 + 0.18 * Math.sin(t * 3.2);
-    for (const g of this.clipBeams.values())
-      g.getObjectByName("ring")?.scale.setScalar(pulse);
+    this.updateEvent(t, cam, fx);
+    this.updateRocket(t, fx);
+    // the beam answers when the car reaches it: the ring swells and pulses fast, the beam brightens
+    for (const g of this.clipBeams.values()) {
+      const near =
+        Math.hypot(g.position.x - px, -g.position.z - py) < BEAM_NEAR;
+      const ring = g.children[1] as THREE.Mesh;
+      ring.scale.setScalar(
+        near ? 1.5 + 0.35 * Math.sin(t * 9) : 1 + 0.18 * Math.sin(t * 3.2),
+      );
+      (
+        (g.children[0] as THREE.Mesh).material as THREE.MeshBasicMaterial
+      ).opacity = near ? 1 : 0.85;
+    }
     if (this.orbit) {
       const a = 0.9 + t * 0.004,
         el = 0.4;
@@ -1825,7 +2943,7 @@ export class MemeView {
         p.hc,
         p.heading,
         PALETTE[i % PALETTE.length],
-        0.04,
+        0.04 + p.pitch,
         0.03 * Math.sin(t * 1.3 + i),
       );
       this.q.setFromAxisAngle(this.up, p.heading);

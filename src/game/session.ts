@@ -1,7 +1,12 @@
 // One commute in the open city: home -> office, traffic, hazards, events, clock, result.
 import * as C from "./constants";
 import { mulberry32 } from "./rng";
-import { landmarkLayout, type LandmarkLayout } from "./landmarks";
+import {
+  cartReturn,
+  landmarkLayout,
+  martSite,
+  type LandmarkLayout,
+} from "./landmarks";
 import {
   type Car,
   type Env,
@@ -65,6 +70,24 @@ function obbHit(
   }
   return { nx, ny, depth };
 }
+/** a hazard's footprint, turned the way it faces */
+function hazardObb(hz: {
+  x: number;
+  y: number;
+  heading: number;
+  halfL: number;
+  halfW: number;
+}): Obb {
+  return {
+    x: hz.x,
+    y: hz.y,
+    c: Math.cos(hz.heading),
+    s: Math.sin(hz.heading),
+    hl: hz.halfL,
+    hw: hz.halfW,
+  };
+}
+
 function boxObb(box: AABB): Obb {
   return {
     x: (box.x0 + box.x1) / 2,
@@ -88,9 +111,11 @@ import {
   type Prop,
   edgePose,
   groundAt,
+  straightOn,
   inBox,
   inRiver,
-  onSkyway,
+  skywayAt,
+  skywayParapet,
   underRoof,
   locateOnRoad,
   snapToLane,
@@ -202,6 +227,11 @@ export interface Hazard {
   phase: number;
   variant: number;
   hit: boolean;
+  /** a cyclist knocked off by the player: height above the road, its climb rate, roll angle and roll rate */
+  z?: number;
+  vz?: number;
+  roll?: number;
+  spin?: number;
 }
 export interface Wire {
   ax: number;
@@ -301,10 +331,19 @@ export class Session {
 
   readonly free: boolean;
   readonly tracker: Tracker;
-  /** reason of the latest crash ("sinkhole", "land", "skycar", ...) */
+  /** reason of the latest crash ("splash", "sinkhole" or "skycar") */
   lastCrash = "";
+  /** wall scrapes make a sound at most every 0.3 s while the car grinds along */
+  private scrapeCd = 0;
   /** cyclist groups already jumped over (keyed by the group's first hazard id: variant i has id first + i) */
   private cleared = new Set<number>();
+  /** ORBIT MART's CART RETURN bay (fills the FUEL tank once a run) */
+  private cartBox: AABB | null = null;
+  private cartUsed = false;
+  /** each ceiling car's distance ahead of the player (in its direction), while the player drives the ceiling */
+  private ceilingAhead = new Map<CeilingCar, number>();
+  /** ceiling cars kept out of sight after looping round next to the player (stepCeiling) */
+  private ceilingHeld = new Set<CeilingCar>();
   private skipLatch = true;
 
   constructor(
@@ -327,6 +366,8 @@ export class Session {
     this.car = newCar(start.x, start.y, start.heading);
     this.traffic = new Traffic(city, this.rnd);
     this.props = city.props.map((p) => ({ ...p, box: { ...p.box } }));
+    const mart = martSite(city);
+    this.cartBox = mart ? cartReturn(mart) : null;
     this.nextEventT = 4 + this.rnd() * 3;
     const canopy = city.toll ? tollCanopy(city.toll) : null;
     this.env = {
@@ -334,29 +375,17 @@ export class Session {
       ground: (x, y, h) => groundAt(city, x, y, h),
       // the river tunnel and the stage canopy both have a drivable ceiling
       tunnel: (x, y) => underRoof(city, x, y),
-      // flying under the skyway: the deck's underside is the roof; the same under the toll canopy
+      // flying under the skyway: the deck's underside is the roof (its ramps are solid); the same under the toll canopy
       ceiling: (x, y, h) => {
-        if (h < city.skyway.h - 1.5 && onSkyway(city, x, y))
-          return city.skyway.h - 1.4 - C.CAR_H;
+        const sw = city.skyway;
+        const k = skywayAt(sw, x);
+        if (k && !k.ramp && h < sw.h - 1.5 && Math.abs(y - sw.y) <= k.half)
+          return sw.h - 1.4 - C.CAR_H;
         const under = PLAZA.bottom - C.CAR_ROOF - 0.05;
         if (canopy && h <= under + 0.3 && inBox(canopy, x, y)) return under;
         return Infinity;
       },
       wallRamp: city.stage?.ramp ?? null,
-      skyway: (x, y, h) => {
-        const s = city.skyway;
-        if (x < s.x0 + 4 || x > s.x1 - 4) return null;
-        const dy = y - s.y;
-        // up on the deck: drop out over the parapet onto the outer lanes
-        if (h >= s.h - 1.5)
-          return Math.abs(dy) <= s.half
-            ? { y1: s.y + (dy < 0 ? -1 : 1) * (s.half + 4), h1: 0 }
-            : null;
-        // anywhere on the roadway below or beside it: climb onto the deck
-        if (Math.abs(dy) > C.ROADWAY_HALF) return null;
-        const lim = s.half - 2.4;
-        return { y1: s.y + C.clamp(dy, -lim, lim), h1: s.h };
-      },
       respawn: (c) => this.respawn(c),
       wet: () => (this.rainT > 0 ? Math.min(1, this.rainT / 2) : 0),
     };
@@ -398,24 +427,22 @@ export class Session {
         return true;
     for (const b of this.layout.buildings)
       if (span.bottom <= b.height && hits(b.box)) return true;
-    for (const p of this.props)
+    for (const p of this.props) {
+      const z0 = p.z0 ?? 0;
       if (
         !(p.kind === "cone" && p.hit) &&
-        (p.kind === "wall" || span.bottom < p.h - 1e-6) &&
+        (p.kind === "wall" ||
+          (span.bottom < z0 + p.h - 1e-6 && span.top > z0)) &&
         hits(p.box)
       )
         return true;
-    const sw = this.city.skyway;
-    if (!c.shift && c.x > sw.x0 - 3 && c.x < sw.x1 + 3) {
-      const dy = Math.abs(c.y - sw.y);
-      if (
-        c.h >= sw.h - 0.5 &&
-        dy <= sw.half &&
-        dy > sw.half - 0.45 - C.CAR_HALF_W
-      )
-        return true;
-      if (c.h < sw.h - 2 && sw.piers.some(hits)) return true;
     }
+    const sw = this.city.skyway;
+    if (
+      skywayParapet(sw, c.x, c.y, C.CAR_HALF_W, span.bottom, span.top) !== null
+    )
+      return true;
+    if (c.h < sw.h - 2 && sw.piers.some(hits)) return true;
     for (const n of [...this.traffic.npcs, ...this.ceilingCars]) {
       if (n.dead) continue;
       const other = npcSpan(n);
@@ -434,16 +461,7 @@ export class Session {
         return true;
     }
     for (const hz of this.hazards)
-      if (
-        !hz.hit &&
-        span.bottom < hz.h &&
-        hits({
-          x0: hz.x - hz.halfL,
-          x1: hz.x + hz.halfL,
-          y0: hz.y - hz.halfL,
-          y1: hz.y + hz.halfL,
-        })
-      )
+      if (!hz.hit && span.bottom < hz.h && obbHit(body, hazardObb(hz)))
         return true;
     return false;
   }
@@ -592,6 +610,7 @@ export class Session {
     const ev = stepCar(car, input, dt, this.env);
     this.t += dt;
     if (this.bumpCd > 0) this.bumpCd -= dt;
+    if (this.scrapeCd > 0) this.scrapeCd -= dt;
     // Integrate both bodies before resolving contacts; traffic must not re-embed the player afterwards.
     this.traffic.update(dt, {
       x: car.x,
@@ -600,6 +619,18 @@ export class Session {
       v: car.v,
     });
     this.stepCeiling(dt);
+    if (car.state === "drive") ev.push(...this.ceilingOvertakes());
+    if (
+      car.state === "drive" &&
+      !this.cartUsed &&
+      this.cartBox &&
+      car.grounded &&
+      inBox(this.cartBox, car.x, car.y)
+    ) {
+      this.cartUsed = true;
+      car.fuel = 1;
+      ev.push("cart");
+    }
 
     if (car.state === "drive") {
       if (inRiver(this.city, car.x, car.y) && car.h < 1.5)
@@ -675,8 +706,10 @@ export class Session {
     const car = this.car;
     const loc = locateOnRoad(this.city, car.x, car.y, car.heading);
     if (!loc) return null;
-    const room = loc.edge.len - C.ROAD_HALF - 10 - loc.s; // metres of straight road ahead
-    // seeded pick, never the same event twice in a row, must fit on the road ahead
+    const sw = this.city.skyway,
+      k = skywayAt(sw, car.x);
+    const up = !!k && car.h > 2 && Math.abs(car.y - sw.y) <= k.half;
+    // seeded pick, never the same event twice in a row, must fit on the road straight ahead (into the next blocks)
     for (let tries = 0; tries < 8; tries++) {
       const kind = EVENT_POOL[Math.floor(this.rnd() * EVENT_POOL.length)];
       if (kind === this.lastEvent) continue;
@@ -694,7 +727,13 @@ export class Session {
         wheel: 80,
         peloton: 100,
       };
-      if (need[kind] > room) continue;
+      if (
+        need[kind] > 0 &&
+        !this.placeAhead(loc.edge, loc.dir, loc.s, need[kind] + 10)
+      )
+        continue;
+      // nothing that drives into the inner lane beside the skyway's ramps, nor down on the road under you up there
+      if (kind !== "rain" && (loc.edge.laneMin || up)) continue;
       if (kind === "ambulance" && loc.s < 70) continue; // needs space behind
       if (kind === "rain" && this.rainT > 0) continue;
       if (!this.startEvent(kind, loc)) continue;
@@ -718,34 +757,62 @@ export class Session {
     return this.startEvent(kind, loc);
   }
 
+  /**
+   * d m straight on from s along this road, into the next blocks of the same row / column: the edge, direction and s
+   * there, or null where the road stops going straight or runs onto a bridge, into the tunnel or a skyway-ramp block.
+   */
+  private placeAhead(
+    edge: Edge,
+    dir: 1 | -1,
+    s: number,
+    d: number,
+  ): { edge: Edge; dir: 1 | -1; s: number } | null {
+    let e = edge,
+      dr = dir,
+      t = s + d;
+    while (t > e.len - C.ROAD_HALF) {
+      const on = straightOn(this.city, e, dr);
+      if (!on || on.edge.crossing || on.edge.laneMin) return null;
+      t -= e.len;
+      e = on.edge;
+      dr = on.dir;
+    }
+    return { edge: e, dir: dr, s: Math.max(C.ROAD_HALF, t) };
+  }
+
   private startEvent(
     kind: EventKind,
     loc: { edge: Edge; dir: 1 | -1; s: number; lane: number },
   ): boolean {
     const { edge, dir, s, lane } = loc;
+    // positions run on straight across the junction ahead (the rows and columns are straight lines)
     const pose = (ds: number, ln: number) =>
       edgePose(this.city, edge, dir, s + ds, ln);
+    // a vehicle d m ahead, on whichever block of this road that is (false: the road does not go on that far)
+    type At = { edge: Edge; dir: 1 | -1; s: number };
+    const npcAhead = (d: number, spawn: (p: At) => void) => {
+      const p = this.placeAhead(edge, dir, s, d);
+      if (p) spawn(p);
+      return !!p;
+    };
+    const T = this.traffic;
     switch (kind) {
       case "camper":
-        this.traffic.spawnCamper(edge, dir, s + 110);
-        return true;
+        return npcAhead(110, (p) => T.spawnCamper(p.edge, p.dir, p.s));
       case "suddenBus":
-        this.traffic.spawnSuddenBus(edge, dir, s + 150, lane);
-        return true;
+        return npcAhead(150, (p) => T.spawnSuddenBus(p.edge, p.dir, p.s, lane));
       case "taxi":
-        this.traffic.spawnMergeTaxi(edge, dir, s + 65, lane);
-        return true;
+        return npcAhead(65, (p) => T.spawnMergeTaxi(p.edge, p.dir, p.s, lane));
       case "wrongWay":
-        this.traffic.spawnWrongWay(edge, dir, s + 150, lane);
-        return true;
+        return npcAhead(150, (p) => T.spawnWrongWay(p.edge, p.dir, p.s, lane));
+      case "bounceBus":
+        return npcAhead(110, (p) =>
+          T.spawnBounceBus(p.edge, p.dir, p.s, Math.min(2, lane + 1)),
+        );
+      case "spill":
+        return npcAhead(85, (p) => T.spawnSpillTruck(p.edge, p.dir, p.s, lane));
       case "ambulance":
         this.traffic.spawnAmbulance(edge, dir, s - 65, lane);
-        return true;
-      case "bounceBus":
-        this.traffic.spawnBounceBus(edge, dir, s + 110, Math.min(2, lane + 1));
-        return true;
-      case "spill":
-        this.traffic.spawnSpillTruck(edge, dir, s + 85, lane);
         return true;
       case "rain":
         this.rainT = 14;
@@ -778,8 +845,10 @@ export class Session {
         // so a hop clears them (the "roadster vs the bike pack" joke); ride into them and you go over the bars
         const spread = [-0.7, -0.35, 0, 0.35, 0.7];
         const stagger = [0.6, 1.8, 0, 2.2, 1.1];
+        // keep the whole pack on the carriageway (an outer-lane player still has riders in their lane)
+        const mid = Math.min(Math.max(lane, 0.7), C.LANES_PER_DIR - 1.7);
         for (let i = 0; i < 5; i++) {
-          const q = pose(84 + stagger[i], lane + spread[i]);
+          const q = pose(84 + stagger[i], mid + spread[i]);
           this.hazards.push({
             id: this.hazardId++,
             kind: "cyclist",
@@ -900,7 +969,7 @@ export class Session {
   private stepHazards(dt: number): void {
     for (const hz of this.hazards) {
       hz.ttl -= dt;
-      if (hz.kind === "scooter") {
+      if (hz.kind === "scooter" && !hz.hit) {
         hz.phase += dt;
         // weave: lateral sine around the lane line
         const c = Math.cos(hz.heading),
@@ -908,6 +977,31 @@ export class Session {
         const lat = Math.cos(hz.phase * 1.6) * 1.1 * dt * 1.6;
         hz.x += hz.vx * dt - sn * lat;
         hz.y += hz.vy * dt + c * lat;
+      } else if ((hz.kind === "cyclist" || hz.kind === "scooter") && hz.hit) {
+        // knocked flying: a ballistic tumble, one bounce, then a slide to a stop lying on its side
+        hz.x += hz.vx * dt;
+        hz.y += hz.vy * dt;
+        hz.z = (hz.z ?? 0) + (hz.vz ?? 0) * dt;
+        hz.vz = (hz.vz ?? 0) - C.GRAVITY * 0.7 * dt; // a little floaty, for the slapstick
+        hz.roll = (hz.roll ?? 0) + (hz.spin ?? 0) * dt;
+        if (hz.z <= 0 && hz.vz < 0) {
+          hz.z = 0;
+          if (hz.vz < -3) {
+            hz.vz *= -0.3;
+            hz.spin = (hz.spin ?? 0) * 0.5;
+            hz.vx *= 0.6;
+            hz.vy *= 0.6;
+          } else {
+            hz.vz = 0;
+            hz.spin = 0;
+            const f = Math.max(0, 1 - 3 * dt);
+            hz.vx *= f;
+            hz.vy *= f;
+            // settle onto its side
+            const side = (Math.round(hz.roll / Math.PI - 0.5) + 0.5) * Math.PI;
+            hz.roll += (side - hz.roll) * Math.min(1, 8 * dt);
+          }
+        }
       } else if (hz.kind === "cyclist") {
         // steady pace, a gentle sway
         hz.phase += dt;
@@ -940,13 +1034,13 @@ export class Session {
       const dx = hz.x - car.x,
         dy = hz.y - car.y;
       if (dx * dx + dy * dy > 36) continue;
-      const box: AABB = {
-        x0: hz.x - hz.halfL,
-        y0: hz.y - hz.halfL,
-        x1: hz.x + hz.halfL,
-        y1: hz.y + hz.halfL,
-      };
-      if (!this.hitsBox(box, C.CAR_HALF_W * 0.8)) continue;
+      if ((hz.kind === "cyclist" || hz.kind === "scooter") && hz.hit) continue; // already flying
+      // the hazard's own footprint, turned the way it faces (a rider is 1.8 m long but only 0.6 m wide), against the
+      // body with the usual small forgiving inset at the sides
+      const body = this.playerObb();
+      body.hw = C.CAR_HALF_W * 0.8;
+      body.hl += body.hw - C.CAR_HALF_W;
+      if (!obbHit(body, hazardObb(hz))) continue;
       if (carSpan(car).bottom > hz.h - 0.2) {
         // cleared it; going over the cycling club is the stunt (once per group)
         if (hz.kind === "cyclist" && !this.cleared.has(hz.variant - hz.id)) {
@@ -956,23 +1050,58 @@ export class Session {
         continue;
       }
       if (hz.kind === "wirepole") {
-        if (gate) ev.push(this.impact(car.v, "pole"));
+        // a solid pole: pushed out of it, losing the speed into it, like any post (never a wipe-out)
+        const hit = obbHit(this.playerObb(), hazardObb(hz));
+        if (hit) {
+          const e = this.wallContact(
+            { x: hit.nx * (hit.depth + 0.01), y: hit.ny * (hit.depth + 0.01) },
+            "pole",
+            hz,
+            gate,
+          );
+          if (e) ev.push(e);
+        }
         return ev;
       }
       if (hz.hit) continue;
       hz.hit = true;
-      hz.ttl = Math.min(hz.ttl, 1.5);
-      if (hz.kind === "scooter" || hz.kind === "cyclist") {
-        // SPEC: hit a scooter (or a cyclist) and you roll
-        if (gate) ev.push(crashCar(car, hz.kind, this.rnd));
-        return ev;
+      if (hz.kind === "cyclist" || hz.kind === "scooter") {
+        // the roadster ploughs on; the rider and bike (or scooter) go flying, away from the bonnet's centre line,
+        // and the car loses a little speed per rider
+        const vel = velocity(car);
+        const side =
+          -(hz.x - car.x) * Math.sin(car.heading) +
+            (hz.y - car.y) * Math.cos(car.heading) >=
+          0
+            ? 1
+            : -1;
+        const k = 0.75 + 0.2 * this.rnd();
+        hz.vx =
+          vel.vx * k - Math.sin(car.heading) * side * (3 + 3 * this.rnd());
+        hz.vy =
+          vel.vy * k + Math.cos(car.heading) * side * (3 + 3 * this.rnd());
+        hz.z = 0.3;
+        hz.vz = 4 + 0.12 * Math.max(0, car.v) + 2 * this.rnd();
+        hz.roll = 0;
+        hz.spin = side * (6 + 5 * this.rnd());
+        hz.h = 0;
+        hz.ttl = 7;
+        car.v *= 0.92;
+        if (gate) ev.push("bump:" + hz.kind);
+        continue;
       }
-      // crate / wheel: a bump at any speed, a crash when fast
+      hz.ttl = Math.min(hz.ttl, 1.5);
+      // crate / wheel: knocked away ahead of the car, which loses a quarter of its speed (never a wipe-out)
       const vel = velocity(car);
       hz.vx = vel.vx * 0.9;
       hz.vy = vel.vy * 0.9;
       hz.h = 0; // knocked away, no longer blocks
-      if (gate) ev.push(this.impact(car.v > 24 ? car.v : 4, hz.kind));
+      const fast = car.v > C.BUMP_MAX_REL;
+      car.v *= 0.75;
+      if (gate) {
+        this.bumpCd = 0.3;
+        ev.push((fast ? "hit:" : "bump:") + hz.kind);
+      }
       return ev;
     }
     // wire snag: airborne through the cable height within 1.2 m of the span
@@ -1012,20 +1141,6 @@ export class Session {
     return obbHit(body, boxObb(box)) !== null;
   }
 
-  /** Low relative speed = bump (lose speed). High = crash. */
-  private impact(rel: number, what: string, otherVx = 0, otherVy = 0): string {
-    const car = this.car;
-    if (rel < C.BUMP_MAX_REL) {
-      const fx = Math.cos(car.heading),
-        fy = Math.sin(car.heading);
-      const otherFwd = otherVx * fx + otherVy * fy;
-      car.v = Math.min(car.v, Math.max(2, otherFwd * 0.9));
-      this.bumpCd = 0.5;
-      return "bump:" + what;
-    }
-    return crashCar(car, what, this.rnd);
-  }
-
   /** Full OBB-vs-box minimum translation, including thin obstacles at the body centre. */
   private penetration(box: AABB): { x: number; y: number } | null {
     const hit = obbHit(this.playerObb(), boxObb(box));
@@ -1034,13 +1149,11 @@ export class Session {
       : null;
   }
 
-  private pushOut(mtv: { x: number; y: number }): string {
-    this.car.x += mtv.x;
-    this.car.y += mtv.y;
-    return "wall";
-  }
-
-  /** Wall/building contact: push out; crash only if the velocity into the wall is high, otherwise scrape. */
+  /**
+   * Wall/building/structure contact: push out and bounce, losing the speed into the wall. Never a wipe-out (only the
+   * river, sinkholes and the sky lane are accidents): a hard hit is a "hit" event (big sparks), grinding along it a
+   * "scrape" (at most every 0.3 s; "wall" is the ramp's wall ride).
+   */
   private wallContact(
     mtv: { x: number; y: number },
     what: string,
@@ -1056,8 +1169,7 @@ export class Session {
       ny = mtv.y / len;
     const vel = velocity(car);
     const vn = -(vel.vx * nx + vel.vy * ny); // speed into the wall
-    if (vn > C.WALL_CRASH_V && car.invuln <= 0 && gate)
-      return crashCar(car, what, this.rnd);
+    const hard = vn > C.BUMP_MAX_REL && gate;
     // remove the normal component (slight bounce), keep tangential
     const k = Math.max(0, vn) * 1.15;
     const tvx = vel.vx + nx * k,
@@ -1069,7 +1181,10 @@ export class Session {
     // nudge heading away from the wall
     const side = -nx * fy + ny * fx; // + = wall normal points left -> wall is on the right
     car.heading += Math.sign(side) * 0.04;
-    return "wall";
+    if (hard) return "hit:" + what;
+    if (this.scrapeCd > 0) return "";
+    this.scrapeCd = 0.3;
+    return "scrape";
   }
 
   /** During the crash replay the wreck bounces off buildings instead of flying through them. */
@@ -1109,32 +1224,29 @@ export class Session {
       ev.push(this.wallContact(m, "building", b, gate));
       return ev;
     }
-    // skyway: parapets keep you on the deck while up there; piers block the median underneath
+    // skyway: the parapets keep you on the deck and its ramps (hop over one and you drop to the road), and keep you
+    // off a ramp from the side; piers block the median under the deck (the ramps' solid bodies are city solids)
     const sw = this.city.skyway;
-    if (!car.shift && car.x > sw.x0 - 3 && car.x < sw.x1 + 3) {
-      const dy = car.y - sw.y;
-      if (car.h >= sw.h - 0.5 && Math.abs(dy) <= sw.half) {
-        const lim = sw.half - 0.45 - C.CAR_HALF_W; // inner face of the parapet
-        if (Math.abs(dy) > lim) {
-          ev.push(
-            this.wallContact(
-              { x: 0, y: Math.sign(dy) * lim - dy },
-              "parapet",
-              "parapet",
-              gate,
-            ),
-          );
+    const py = skywayParapet(
+      sw,
+      car.x,
+      car.y,
+      C.CAR_HALF_W,
+      span.bottom,
+      span.top,
+    );
+    if (py !== null) {
+      ev.push(this.wallContact({ x: 0, y: py }, "parapet", "parapet", gate));
+      return ev;
+    }
+    if (car.h < sw.h - 2)
+      for (const p of sw.piers) {
+        const m = this.penetration(p);
+        if (m) {
+          ev.push(this.wallContact(m, "pier", p, gate));
           return ev;
         }
-      } else if (car.h < sw.h - 2)
-        for (const p of sw.piers) {
-          const m = this.penetration(p);
-          if (m) {
-            ev.push(this.wallContact(m, "pier", p, gate));
-            return ev;
-          }
-        }
-    }
+      }
     // Solid overhead signs: only test nearby parts that overlap the full rotated body vertically.
     // All parts (including a speared wreck) share a structure key for one contact effect.
     for (const sign of this.city.signs.colliders) {
@@ -1159,6 +1271,9 @@ export class Session {
     }
     for (const o of this.props) {
       if (!near(o.box)) continue;
+      // a car standing up on the skyway deck is nothing to one passing under it
+      const z0 = o.z0 ?? 0;
+      if (z0 > 0 && span.top <= z0) continue;
       if (o.kind === "wall") {
         const m = this.penetration(o.box);
         if (m) {
@@ -1179,11 +1294,11 @@ export class Session {
       }
       const standingCar =
         o.kind === "jamcar" || o.kind === "parked" || o.kind === "stagecar";
-      if (standingCar && this.stomp(o, o.h)) {
+      if (standingCar && this.stomp(o, z0 + o.h)) {
         ev.push("stomp");
         continue;
       }
-      if (carSpan(car).bottom >= o.h) continue;
+      if (carSpan(car).bottom >= z0 + o.h) continue;
       if (o.kind === "toll") {
         // FLYERS TOLL $0: drivers who stay on the ground snap the arm and lose their momentum (no wipe-out)
         if (this.t - this.tollT > 1.5) {
@@ -1219,11 +1334,11 @@ export class Session {
         if (e) ev.push(e);
         continue;
       }
+      // barriers, dumpsters, containers: solid, bounce off like a wall
       const mtv = this.penetration(o.box);
-      if (mtv) this.pushOut(mtv);
-      if (this.firstContact(o)) {
-        if (gate && this.bumpCd <= 0) ev.push(this.impact(car.v, o.kind));
-        else car.v = Math.min(car.v, 2);
+      if (mtv) {
+        const e = this.wallContact(mtv, o.kind, o, gate && this.bumpCd <= 0);
+        if (e) ev.push(e);
       }
       return ev;
     }
@@ -1347,11 +1462,51 @@ export class Session {
 
   private stepCeiling(dt: number): void {
     const lim = C.TUNNEL_HALF_X - CEIL_MARGIN;
+    const car = this.car;
+    const up = car.ceiling || car.h > 2;
     for (const c of this.ceilingCars) {
       c.x += c.dir * c.v * dt;
-      if (c.dir > 0 && c.x > lim) c.x -= 2 * lim;
-      else if (c.dir < 0 && c.x < -lim) c.x += 2 * lim;
+      let wrapped = false;
+      if (c.dir > 0 && c.x > lim) {
+        c.x -= 2 * lim;
+        wrapped = true;
+      } else if (c.dir < 0 && c.x < -lim) {
+        c.x += 2 * lim;
+        wrapped = true;
+      }
+      // a car looping round from the far mouth would appear out of nowhere on top of a player up there near the
+      // other one: it stays away (not drawn, not solid) until the player is well clear of it
+      const near =
+        up && Math.abs(car.x - c.x) < 60 && Math.abs(car.y - c.y) < 4;
+      if (wrapped && near && !c.dead) {
+        c.dead = true;
+        this.ceilingHeld.add(c);
+      } else if (!near && this.ceilingHeld.delete(c)) c.dead = false;
     }
+  }
+
+  /** Driving the ceiling lane yourself and passing a ceiling car going your way: an UPSIDE-DOWN OVERTAKE. */
+  private ceilingOvertakes(): string[] {
+    const car = this.car;
+    const out: string[] = [];
+    if (!car.ceiling) {
+      this.ceilingAhead.clear();
+      return out;
+    }
+    const fx = Math.cos(car.heading);
+    for (const c of this.ceilingCars) {
+      if (c.dead || c.dir * fx < 0.5 || Math.abs(c.y - car.y) > 6) {
+        this.ceilingAhead.delete(c);
+        continue;
+      }
+      const ahead = (c.x - car.x) * c.dir;
+      const was = this.ceilingAhead.get(c);
+      // from ahead to just behind (a car looping round from the far mouth jumps by far more than 10 m)
+      if (was !== undefined && was > 0 && ahead <= 0 && ahead > -10)
+        out.push("overtake");
+      this.ceilingAhead.set(c, ahead);
+    }
+    return out;
   }
 
   /** Ceiling lanes block any overlapping body, regardless of attachment or flight state. */

@@ -94,6 +94,7 @@ describe("traffic contact regressions (#3)", () => {
       t: 0.5,
       next: edge,
       nextDir: 1,
+      lane: 0,
     };
     // Incoming route differs; the contact is spatial rather than edge/lane equality.
     rear.edge = city.edges.find((e) => e !== edge)!;

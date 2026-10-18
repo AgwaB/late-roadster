@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { CAR_H, CEIL_H, CEIL_RISE } from "./game/constants";
-import { buildCity, groundAt, inBox, underRoof } from "./game/city";
+import { buildCity, groundAt, inBox, skywayAt, underRoof } from "./game/city";
+import { PLAZA } from "./game/toll";
 import { dailySeed } from "./game/rng";
 import { Session } from "./game/session";
 import { InputState } from "./input";
@@ -26,6 +27,17 @@ import { NpcRenderer, buildPlayerCar } from "./render/vehicles";
 import { Hud } from "./ui/hud";
 import { Lobby } from "./ui/lobby";
 import { CLIPS } from "./game/score";
+import { rampWorld } from "./game/venue";
+import {
+  bestGradeOf,
+  finiteOr,
+  load as loadP,
+  parseSet,
+  save as saveP,
+  saveBest,
+  saveSetMerged,
+  type Store,
+} from "./progress";
 
 const STEP = 1 / 120;
 const MAX_STEPS = 8;
@@ -47,50 +59,53 @@ const cam = new ChaseCam(kit.camera);
 const fx = new Particles();
 kit.scene.add(fx.points);
 
-// progress kept across visits: filmed clips (key lr.cards, kept from when they were cards), which crash tips were
-// shown, best grade and VIEWS
-// (storage can be unavailable or full: reads fall back to defaults, writes are best effort)
-const load = (k: string): string | null => {
+// progress kept across visits (src/progress.ts): filmed clips (key lr.cards, kept from when they were cards), which
+// crash tips were shown, best grade and VIEWS; saves merge with what another tab may have stored meanwhile
+const store: Store | null = (() => {
   try {
-    return localStorage.getItem(k);
+    return window.localStorage;
   } catch {
     return null;
   }
-};
-const save = (k: string, v: string): void => {
-  try {
-    localStorage.setItem(k, v);
-  } catch {
-    /* private mode / quota: this visit just will not be remembered */
-  }
-};
-const readSet = (k: string): Set<string> => {
-  try {
-    const v: unknown = JSON.parse(load(k) ?? "[]");
-    return new Set(Array.isArray(v) ? v.map(String) : []);
-  } catch {
-    return new Set();
-  }
-};
-const saveSet = (k: string, s: Set<string>) => save(k, JSON.stringify([...s]));
-const finiteOr = (v: string | null, d: number): number => {
-  const n = Number(v);
-  return v !== null && Number.isFinite(n) && n >= 0 ? n : d;
-};
+})();
+const load = (k: string) => loadP(store, k);
+const save = (k: string, v: string) => saveP(store, k, v);
+const readSet = (k: string) => parseSet(load(k));
+const saveSet = (k: string, s: Set<string>) => saveSetMerged(store, k, s);
 const known = readSet("lr.cards");
 const tipsShown = readSet("lr.tips");
-const GRADE_RANK = ["LATE", "C", "B", "A", "S"];
 let bestViews = finiteOr(load("lr.bestViews"), 0);
-let bestGrade = load("lr.bestGrade");
-if (bestGrade && !GRADE_RANK.includes(bestGrade)) bestGrade = null;
-
-const lobby = new Lobby(document.getElementById("hud")!, {
-  start: () => begin(false),
-  free: () => begin(true),
+let bestGrade = bestGradeOf(load("lr.bestGrade"), null);
+// another tab filmed a clip or set a best: take it in (its next save merges with ours anyway)
+window.addEventListener("storage", (e) => {
+  if (e.key === "lr.cards") for (const v of parseSet(e.newValue)) known.add(v);
+  else if (e.key === "lr.bestViews")
+    bestViews = Math.max(bestViews, finiteOr(e.newValue, 0));
+  else if (e.key === "lr.bestGrade")
+    bestGrade = bestGradeOf(bestGrade, e.newValue);
 });
+
+const lobby = new Lobby(
+  document.getElementById("hud")!,
+  {
+    start: () => begin(false),
+    free: () => begin(true),
+  },
+  isTouch,
+);
 hud.onLobby = () => {
   if (!lobby.isOpen && session.state === "run") openLobby();
 };
+// the whole lobby is laid out while loading (the clips and bests are already known; today's commute is a
+// placeholder until the city is built), so it does not grow and jump when the loading is done
+lobby.show({
+  persona: "",
+  distance: 0,
+  bestGrade,
+  bestViews,
+  known,
+  thumb: (id: string) => load("lr.thumb." + id),
+});
 const assets = await loadAssets((d, t) => lobby.setLoading(d / t));
 kit.setSky(assets.sky, assets.skyBg);
 const city = buildCity(dailySeed());
@@ -104,10 +119,62 @@ let paused = true;
 let started = false;
 let lastInput: Input = NO_INPUT;
 let cityView: CityView | null = null;
+/** 4x4 target the shaders are compiled against (see newSession) */
+let warmRT: THREE.WebGLRenderTarget | undefined;
 // approved round-3 design master (R_00_v2) is silver
 const player = buildPlayerCar(assets, 0xc9cdd2);
 kit.scene.add(player.root);
 const npcs = new NpcRenderer(assets, kit.scene);
+// TICKET PENDING: park on the toll canopy roof and a ticket lands under the wiper; it blows away on the next take-off
+const ticket = (() => {
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 80;
+  const g = c.getContext("2d")!;
+  g.fillStyle = "#fbf8ee";
+  g.fillRect(0, 0, 128, 80);
+  g.fillStyle = "#d62b2b";
+  g.fillRect(0, 0, 128, 20);
+  g.fillStyle = "#fff";
+  g.font = "800 15px system-ui, sans-serif";
+  g.textAlign = "center";
+  g.fillText("NOTICE", 64, 15);
+  g.fillStyle = "#333";
+  g.font = "700 12px system-ui, sans-serif";
+  g.fillText("ROOF PARKING", 64, 42);
+  g.fillText("NOT PERMITTED", 64, 60);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(
+    // flat, then turned so it reads across the car from the front, then laid on the glass's slope
+    new THREE.PlaneGeometry(0.36, 0.23)
+      .rotateX(-Math.PI / 2)
+      .rotateY(Math.PI / 2)
+      .rotateZ(-0.28),
+    new THREE.MeshStandardMaterial({
+      map: t,
+      roughness: 0.9,
+      side: THREE.DoubleSide,
+    }),
+  );
+  // on the windscreen, driver's side (body frame: x forward, y up, z right; the glass is ~1.07 m up there, at 16°)
+  m.position.set(0.9, 1.1, 0.3);
+  m.visible = false;
+  (player.root.children[0] as THREE.Group).add(m);
+  return m;
+})();
+const PAPER = new THREE.Color(0.97, 0.96, 0.9);
+// side balance jets (body frame: x forward, y up, z right), each pair blowing straight out of its side
+const SIDE_JETS_R = [
+    new THREE.Vector3(0.6, 0.6, 1.0),
+    new THREE.Vector3(-1.0, 0.6, 1.0),
+  ],
+  SIDE_JETS_L = [
+    new THREE.Vector3(0.6, 0.6, -1.0),
+    new THREE.Vector3(-1.0, 0.6, -1.0),
+  ];
+const SIDE_R = new THREE.Vector3(0, 0, 1),
+  SIDE_L = new THREE.Vector3(0, 0, -1);
 // the visual memes are built once for the whole page (not per commute)
 const memes = new MemeView(city, assets);
 kit.scene.add(memes.group);
@@ -124,6 +191,7 @@ window.addEventListener("keydown", (e) => {
     !e.repeat &&
     !e.defaultPrevented &&
     !hud.paused &&
+    !hud.resultShowing &&
     !lobby.isOpen &&
     session.state === "run"
   ) {
@@ -133,7 +201,56 @@ window.addEventListener("keydown", (e) => {
 });
 const hazardsView = new HazardRenderer(kit.scene, (n) => assets.tex.get(n));
 let devCam: { pos: number[]; look: number[] } | null = null;
+// per-run presentation (declared before the first newSession(), which clears it)
+let faceShown = false;
+/** real seconds of slow motion left (set over the ramp's lip) */
+let slowT = 0;
+/** the rocket's liftoff shot is on (the world runs slowed around it) */
+let rocketShot = false;
+/** JUMP / STICK pressed to skip the liftoff shot: not passed on to the car until released */
+let swallowKeys = false;
+/** a parking ticket is stuck on the windscreen */
+let ticketed = false;
+/** the run's best stunt so far, by recording time (SAVE <label> on the result card films around it) */
+let bestStunt: { t: number; label: string; rank: number } | null = null;
+/** a stunt worth a clip: kept if it ranks at least as high as the best so far (later wins a tie) */
+function stunt(label: string, rank: number): void {
+  if (!bestStunt || rank >= bestStunt.rank)
+    bestStunt = { t: clip.elapsed, label, rank };
+}
+/** PHOTO FINISH: caption of the arrival photo taken from the next frame drawn */
+let pendingPhoto: { caption: string; late: boolean } | null = null;
+/** clips just filmed for the first time: their lobby thumbnail is taken from the next frame drawn */
+const pendingThumbs: string[] = [];
+/** the car left the ramp's lip and has not touched down yet: its landing is the big moment */
+let rampFlight = false;
+/** Seconds of downward thruster burn left to draw (jump launch, rotation burn). */
+let burnT = 0,
+  burnMax = 1;
+/** s until the next ground gas cloud under the hold-to-fly jets */
+let thrustCloudT = 0;
 let session = newSession(false);
+
+/**
+ * A new session: nothing of the last run's show carries over (a ramp flight abandoned mid-air would otherwise film
+ * the next commute's first jump from the venue and cheer its landing; a liftoff shot or slow motion would run on).
+ */
+function resetRunPresentation(): void {
+  faceShown = false;
+  slowT = 0;
+  rocketShot = false;
+  ticketed = ticket.visible = false;
+  bestStunt = null;
+  pendingPhoto = null;
+  pendingThumbs.length = 0;
+  hud.setCutaway(false);
+  swallowKeys = false;
+  rampFlight = false;
+  burnT = 0;
+  burnMax = 1;
+  thrustCloudT = 0;
+  memes.resetRun();
+}
 lobby.show(lobbyInfo());
 lobby.setReady();
 
@@ -144,6 +261,7 @@ function lobbyInfo() {
     bestGrade,
     bestViews,
     known,
+    thumb: (id: string) => load("lr.thumb." + id),
   };
 }
 
@@ -186,9 +304,11 @@ function begin(free: boolean): void {
 function newSession(free: boolean): Session {
   acc = 0;
   lastCrashMediaTime = null;
+  resetRunPresentation();
   npcs.sync([]);
   resultShown = false;
-  const s = new Session(city, dailySeed(), runIndex, undefined, {
+  // the city's own seed: a tab left open past midnight keeps playing the day it built
+  const s = new Session(city, city.seed, runIndex, undefined, {
     free,
     known,
   });
@@ -202,8 +322,35 @@ function newSession(free: boolean): Session {
   // compile every material and upload every texture up front: otherwise shaders compile and 2k textures upload
   // mid-drive as they first enter the frustum (100-300 ms hitches on the first pass through each district)
   npcs.prewarm();
-  kit.renderer.compile(kit.scene, kit.camera);
-  kit.renderer.render(kit.scene, kit.camera); // warm draw (title screen covers it): uploads NPC car buffers now
+  // Warm draw: every object once, into an offscreen target (the composer's variant: linear output, no tone mapping),
+  // with frustum culling off, hidden things shown and empty instanced batches given one copy, so every shader (shadow
+  // passes and two-pass transparent ones included) compiles and every buffer uploads now, behind the lobby or the
+  // result card. A plain compile() missed variants: streamed buildings, boosters, sparks and jets then compiled
+  // mid-drive on first sight (50-300 ms hitches).
+  {
+    warmRT ??= new THREE.WebGLRenderTarget(8, 8, { type: THREE.HalfFloatType });
+    const restore: (() => void)[] = [];
+    kit.scene.traverse((o) => {
+      if (o.frustumCulled) {
+        o.frustumCulled = false;
+        restore.push(() => (o.frustumCulled = true));
+      }
+      // (never a light: the light count is part of every program, it must stay as in play)
+      if (!o.visible && !(o as THREE.Light).isLight) {
+        o.visible = true;
+        restore.push(() => (o.visible = false));
+      }
+      const im = o as THREE.InstancedMesh;
+      if (im.isInstancedMesh && im.count === 0) {
+        im.count = 1;
+        restore.push(() => (im.count = 0));
+      }
+    });
+    kit.renderer.setRenderTarget(warmRT);
+    kit.renderer.render(kit.scene, kit.camera);
+    kit.renderer.setRenderTarget(null);
+    for (const f of restore) f();
+  }
   {
     const seen = new Set<THREE.Texture>();
     const keys = [
@@ -237,23 +384,66 @@ function newSession(free: boolean): Session {
 }
 
 function syncNpcs(): void {
-  npcs.sync(session.traffic.npcs, session.ceilingCars);
+  // traffic beyond 330 m is not drawn (fog has it 20 % gone there; ~200 cars city-wide)
+  npcs.sync(
+    session.traffic.npcs,
+    session.ceilingCars,
+    kit.camera.position.x,
+    kit.camera.position.z,
+    330,
+  );
 }
 
 const hidden = new THREE.Matrix4().makeScale(0, 0, 0);
 const DOWN = new THREE.Vector3(0, -1, 0),
   UP = new THREE.Vector3(0, 1, 0);
 let wheelSteer = 0;
-let lastTickerT = -1e9;
-let faceShown = false;
+// BREAKING NEWS cards (top right): the city's other roadsters make the news now and then (a nearby wipeout or flip
+// pile-up, or a story every 35-60 s); the player's own wipeout never does. Pictures: the round-5 clip images.
+const NEWS: { img: string; lines: string[] }[] = [
+  {
+    img: "hop", // CL_07: a roadster come down on a sedan's roof in the fast lane
+    lines: [
+      "FLIP PILE-UP: ROADSTER LANDS ON THE CAR AHEAD",
+      "COMMUTER PARKS ON A SEDAN, MID-TRAFFIC",
+      "SEDAN DRIVER: 'IT JUST CAME DOWN ON ME'",
+    ],
+  },
+  {
+    img: "news", // CL_12: a roadster on its roof, commuters filming
+    lines: [
+      "MORNING FLIP ENDS UPSIDE DOWN",
+      "ROADSTER ON ITS ROOF, COMMUTERS FILM",
+      "INSURER STOPS WATCHING HALFWAY THROUGH",
+    ],
+  },
+  {
+    img: "sinkhole", // CL_08: a roadster jumping a sinkhole
+    lines: [
+      "SINKHOLE OPENS ON THE BOULEVARD",
+      "CITY: SINKHOLES 'NOT A SHORTCUT'",
+    ],
+  },
+];
+const NEWS_PILEUP = 0,
+  NEWS_WIPEOUT = 1;
+let lastNewsT = -1e9;
+let nextNewsT = 20;
+function newsFlash(i: number): void {
+  const n = NEWS[i];
+  hud.news(
+    import.meta.env.BASE_URL + "assets/clips/" + n.img + ".webp",
+    n.lines[Math.floor(Math.random() * n.lines.length)],
+  );
+  sfx.event("news");
+  lastNewsT = session.t;
+  nextNewsT = session.t + 35 + Math.random() * 25;
+}
+const cinePos = new THREE.Vector3(),
+  cineLook = new THREE.Vector3();
 const TALL = new Set(["camper", "truck", "bus", "van"]);
 const spinAxisV = new THREE.Vector3(),
   spinQ = new THREE.Quaternion();
-/** Seconds of downward thruster burn left to draw (jump launch, rotation burn). */
-let burnT = 0,
-  burnMax = 1;
-/** s until the next ground gas cloud under the hold-to-fly jets */
-let thrustCloudT = 0;
 function handleEvents(ev: string[]): void {
   if (import.meta.env.DEV && ev.length)
     ((window as unknown as { __ev: string[] }).__ev ??= []).push(...ev);
@@ -261,6 +451,35 @@ function handleEvents(ev: string[]): void {
   const inner = player.root.children[0] as THREE.Group;
   inner.updateMatrixWorld(true);
   const M = inner.matrixWorld;
+  // any take-off (or a wipe-out) blows the parking ticket off the windscreen
+  if (
+    ticketed &&
+    ev.some(
+      (e) =>
+        e === "jump" ||
+        e === "launch" ||
+        e === "flipStart" ||
+        e === "wall" ||
+        e.startsWith("crash"),
+    )
+  ) {
+    ticketed = ticket.visible = false;
+    const p = ticket.position.clone().applyMatrix4(M);
+    for (let i = 0; i < 8; i++)
+      fx.emit(
+        p,
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 3,
+          3 + Math.random() * 3,
+          (Math.random() - 0.5) * 3,
+        ),
+        2.2,
+        0.3,
+        PAPER,
+        { drag: 1.5, grav: 2, spread: 0.6 },
+      );
+    hud.notice("TICKET", "PENDING");
+  }
   for (const e of ev) {
     const [k, v] = e.split(":");
     // NPC-vs-NPC wrecks are heard (and reported) only when they happen near the player
@@ -270,7 +489,7 @@ function handleEvents(ev: string[]): void {
       near = !!n && Math.hypot(n.x - session.car.x, n.y - session.car.y) < 120;
     }
     if (near) sfx.event(k, v);
-    // on-screen captions: only the accident news (BREAKING band on a crash, NPC wreck tickers) is left
+    // on-screen captions: the WIPEOUT band on a crash and the BREAKING NEWS cards about other roadsters
     if (k === "land") {
       // touchdown in a cloud of cold gas, as in the demo
       const c = session.car;
@@ -282,6 +501,32 @@ function handleEvents(ev: string[]): void {
         flipped ? 1.3 : 0.9,
       );
       for (const n of player.bottomNozzles) puff(fx, M, n, DOWN, 8, 8);
+      // a botched landing slams back onto the wheels: sparks instead of a wipe-out
+      if (v === "rough") sparks(fx, player.root.position.clone(), 35);
+      // parked on the toll canopy roof: a ticket under the wiper
+      if (
+        !ticketed &&
+        Math.abs(c.h - PLAZA.top) < 0.1 &&
+        city.decks.some((d) => inBox(d.box, c.x, c.y))
+      ) {
+        ticketed = ticket.visible = true;
+        hud.notice("PARKING TICKET", "NO PERMIT FOR THE ROOF");
+      }
+      if (rampFlight) {
+        // down off the ramp: the stands erupt, the beams find the car, confetti, a camera jolt, and the rocket by
+        // the run-in lifts off
+        rampFlight = false;
+        const big = v !== "rough";
+        const fl = ev.find((e) => e.startsWith("flip:"));
+        const extra = big && !!fl && Number(fl.split(":")[1]) >= 2;
+        stunt(extra ? "ONE MORE FLIP" : "THE RAMP", extra ? 4 : 3);
+        if (memes.celebrate(c.x, c.y, wall, big, fx, extra))
+          sfx.event("liftoff");
+        sfx.event("applause", big ? "big" : "small");
+        cam.kick(big ? 0.9 : 0.5);
+      }
+    } else if (k === "scrape") {
+      sparks(fx, player.root.position.clone(), 6);
     } else if (k === "toll") {
       sparks(fx, player.root.position.clone(), 18);
     } else if (k === "pothole") {
@@ -309,10 +554,6 @@ function handleEvents(ev: string[]): void {
       // jet-powered rise to the ceiling: all four bottom jets fire for the climb (dropping off uses no jets)
       for (const n of player.bottomNozzles) puff(fx, M, n, DOWN, 16, 16);
       burnT = burnMax = CEIL_RISE;
-    } else if (k === "skyway") {
-      // the overpass escape from the demo: all four jets fire for the whole climb
-      for (const n of player.bottomNozzles) puff(fx, M, n, DOWN, 16, 16);
-      burnT = burnMax = v === "up" ? 0.9 : 0.4;
     } else if (k === "jump") {
       // launch: four downward jets + a gas cloud rolling out from under the car
       for (const n of player.bottomNozzles) puff(fx, M, n, DOWN, 16, 16);
@@ -336,7 +577,27 @@ function handleEvents(ev: string[]): void {
       }
       for (const n of player.rearNozzles) puff(fx, M, n, UP, 8, 10);
       burnT = burnMax = Math.max(0.35, (Math.PI * 2) / session.car.flipRate);
+    } else if (k === "cart") {
+      // CART RETURN at ORBIT MART: the carts top up the tank
+      const c = session.car;
+      gasCloud(
+        fx,
+        new THREE.Vector3(c.x, groundAt(city, c.x, c.y, c.h).h, -c.y),
+        50,
+        2.4,
+        0.8,
+      );
+      hud.notice("CART RETURN", "TANK FULL");
+    } else if (k === "retro") {
+      // the jets catch the car falling off the ramp: a burst out of all four, then they hold it (frame loop)
+      for (const n of player.bottomNozzles) puff(fx, M, n, DOWN, 18, 18);
+    } else if (k === "walltop") {
+      slowT = 0.9;
+      rampFlight = true;
+      // over the lip: the side jets fire to start the roll upright (they keep at it in the frame loop)
+      for (const n of SIDE_JETS_R) puff(fx, M, n, SIDE_R, 14, 16);
     } else if (k === "crash") {
+      rampFlight = false;
       lastCrashMediaTime = clip.elapsed;
       sparks(fx, player.root.position.clone(), 60);
       // the cause as a headline; the tip only the first time this cause happens
@@ -348,22 +609,21 @@ function handleEvents(ev: string[]): void {
     } else if (k === "clip") {
       hud.clipToast(v);
       saveSet("lr.cards", known);
+      pendingThumbs.push(v);
+      if (v === "kickflip") stunt("THE KICKFLIP", 3);
+      else if (v !== "news")
+        stunt(CLIPS.find((c) => c.id === v)?.title ?? "STUNT", 1);
+    } else if (k === "flip" && Number(v) >= 2) {
+      stunt("FLIP RESET", 2);
     } else if (k === "views") {
       const [, n, mult] = e.split(":");
       hud.viewsPop(Number(n), Number(mult));
     } else if (k === "npcfail") {
-      // a fellow roadster commuter botched its flip: news only when it happened near us, at most one ticker per 45 s
-      // (commuters stunt constantly now, so a looser rule kept the ticker on screen all the time)
-      if (near && (session.t - lastTickerT > 45 || session.t < lastTickerT)) {
-        lastTickerT = session.t;
-        hud.ticker("BREAKING: ROADSTER WIPEOUT");
-      }
+      // a fellow roadster commuter botched its flip near us: the news, at most one card per 25 s
+      if (near && session.t - lastNewsT > 25) newsFlash(NEWS_WIPEOUT);
     } else if (k === "npccrash") {
       // a backflipping NPC came down on the car ahead and rolled it over
-      if (near && (session.t - lastTickerT > 45 || session.t < lastTickerT)) {
-        lastTickerT = session.t;
-        hud.ticker("BREAKING: FLIP PILE-UP");
-      }
+      if (near && session.t - lastNewsT > 25) newsFlash(NEWS_PILEUP);
     } else if (k === "wire") {
       sparks(fx, player.root.position.clone(), 25);
     } else if (k === "cone" && cityView) {
@@ -376,6 +636,39 @@ function handleEvents(ev: string[]): void {
         }
       }
     }
+  }
+}
+
+/**
+ * Highest the chase camera may go: under a roof the car is under (the tunnel, the skyway deck, the toll canopy) it
+ * stays below it, or a high flight camera ends up above the deck looking at concrete instead of the car.
+ */
+function cameraRoof(tunnel: boolean): number {
+  const car = session.car;
+  if (tunnel) return CEIL_H - 0.7;
+  const sw = city.skyway,
+    k = skywayAt(sw, car.x);
+  if (k && !k.ramp && Math.abs(car.y - sw.y) <= k.half && car.h < sw.h - 1.5)
+    return sw.h - 1.4 - 0.6;
+  if (
+    city.decks.some((d) => inBox(d.box, car.x, car.y) && car.h < PLAZA.bottom)
+  )
+    return PLAZA.bottom - 0.6;
+  return Infinity;
+}
+
+/** The frame just drawn, w px wide, as a JPEG data URL ("" if the canvas cannot be read). */
+function snapshot(w: number, q: number): string {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = Math.max(2, Math.round((w * canvas.height) / canvas.width));
+  const g = c.getContext("2d");
+  if (!g) return "";
+  try {
+    g.drawImage(canvas, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", q);
+  } catch {
+    return "";
   }
 }
 
@@ -413,11 +706,38 @@ function frame(now: number): void {
   const car = session.car;
   if (session.state === "run" && !paused && !hud.paused) {
     // Drop excess debt rather than accumulating an unbounded catch-up backlog.
-    acc = Math.min(acc + dt, STEP * MAX_STEPS);
+    // over the ramp's lip the world slows down for a moment (the car hangs upside down at the top), then snaps back;
+    // through the rocket's liftoff shot it all but stops (the rocket and the crowd go on in real time)
+    const simDt = slowT > 0 ? dt * 0.3 : rocketShot ? dt * 0.2 : dt;
+    slowT = Math.max(0, slowT - dt);
+    acc = Math.min(acc + simDt, STEP * MAX_STEPS);
     let n = 0;
     while (acc >= STEP && n++ < MAX_STEPS && session.state === "run") {
+      const prev = lastInput;
       lastInput = input.read();
-      handleEvents(session.step(STEP, lastInput));
+      if (rocketShot) {
+        // the liftoff shot: hands off the wheel while the car is off screen (it coasts); a fresh JUMP / STICK press
+        // cuts back to it (and does not also hop: held keys are ignored until let go)
+        if (
+          (lastInput.jump && !prev.jump) ||
+          (lastInput.stick && !prev.stick)
+        ) {
+          memes.skipShot();
+          swallowKeys = true;
+        }
+        handleEvents(session.step(STEP, NO_INPUT));
+      } else {
+        if (swallowKeys && !lastInput.jump && !lastInput.stick)
+          swallowKeys = false;
+        handleEvents(
+          session.step(
+            STEP,
+            swallowKeys
+              ? { ...lastInput, jump: false, stick: false }
+              : lastInput,
+          ),
+        );
+      }
       acc -= STEP;
     }
     if (session.result && !resultShown) {
@@ -442,17 +762,23 @@ function frame(now: number): void {
               )
           : null,
       );
-      if (res.finalViews > bestViews) {
-        bestViews = res.finalViews;
-        save("lr.bestViews", String(bestViews));
-      }
-      if (
-        !bestGrade ||
-        GRADE_RANK.indexOf(res.grade) > GRADE_RANK.indexOf(bestGrade)
-      ) {
-        bestGrade = res.grade;
-        save("lr.bestGrade", bestGrade);
-      }
+      // the best stunt of the run, as its own clip
+      const best = bestStunt;
+      hud.setSaveBest(
+        clip.supported && best
+          ? (setLabel) => clip.exportClip(best.t, total, best.label, setLabel)
+          : null,
+        best?.label,
+      );
+      // PHOTO FINISH: the arrival frame, captioned like a punched time card (taken after this frame is drawn)
+      pendingPhoto = res.finished
+        ? { caption: "CLOCKED IN  " + session.clock, late: false }
+        : { caption: "LATE  9:00:00", late: true };
+      ({ grade: bestGrade, views: bestViews } = saveBest(
+        store,
+        bestGradeOf(bestGrade, res.grade) ?? res.grade,
+        Math.max(res.finalViews, bestViews),
+      ));
       hud.showResult(
         session.result,
         () => begin(false),
@@ -470,7 +796,12 @@ function frame(now: number): void {
   }
   // player transform
   const g = groundAt(city, car.x, car.y, car.h);
-  const slope = car.grounded ? g.slope : 0;
+  // nose up climbing a ramp, down coming back down it (the slope is up toward dir along its axis)
+  const slope = car.grounded
+    ? g.slope *
+      g.dir *
+      (g.axis === "x" ? Math.cos(car.heading) : Math.sin(car.heading))
+    : 0;
   player.root.position.set(car.x, car.h + CAR_H / 2, -car.y);
   player.root.rotation.set(
     car.roll,
@@ -504,15 +835,16 @@ function frame(now: number): void {
       (blob as THREE.Mesh).visible = car.state !== "crash" && !car.wall;
     }
   }
-  // back on the road after a crash: the car blinks while it cannot be hit
-  player.root.visible = !(
+  // back on the road after a crash: the car blinks while it cannot be hit (the body only: the headlight stays on, so
+  // the scene's light count, and with it every material's program, does not flip each blink)
+  const inner = player.root.children[0] as THREE.Group;
+  inner.visible = !(
     car.state === "drive" &&
     car.invuln > 0 &&
     started &&
     Math.floor(wall * 10) % 2 === 1
   );
   // continuous FX
-  const inner = player.root.children[0] as THREE.Group;
   inner.updateMatrixWorld(true);
   if (car.state === "drive") {
     if (car.drifting && car.grounded) driftSmoke(fx, inner.matrixWorld);
@@ -528,18 +860,46 @@ function frame(now: number): void {
         gasCloud(fx, new THREE.Vector3(car.x, gh, -car.y), 14, 2.6, 0.7);
       }
     }
+    if (car.rampDrop && !car.grounded) {
+      // down off the ramp's lip, as in the reveal: side jets roll it upright (on the side coming up), then the
+      // bottom jets hold it up on long white plumes, blasting a cloud off the floor as it settles
+      if (Math.abs(car.roll) > 0.02)
+        thrusterStream(
+          fx,
+          inner.matrixWorld,
+          car.roll > 0 ? SIDE_JETS_R : SIDE_JETS_L,
+          car.roll > 0 ? SIDE_R : SIDE_L,
+          4,
+        );
+      if (car.retro) {
+        const gh = groundAt(city, car.x, car.y, car.h).h;
+        thrustCloudT -= dt;
+        if (car.h - gh < 8 && thrustCloudT <= 0) {
+          thrustCloudT = 0.08;
+          gasCloud(
+            fx,
+            new THREE.Vector3(car.x, gh, -car.y),
+            22,
+            3.4,
+            1 + (8 - (car.h - gh)) * 0.08,
+          );
+        }
+      }
+    }
   }
   // downward thruster jets: launch burn and rotation burn, fading toward the end
   burnT = Math.max(0, burnT - dt);
   const burn =
     car.state === "drive" && !car.grounded
-      ? car.thrusting
-        ? car.fuel <= 0
-          ? 0.35 + Math.random() * 0.3 // tank empty: the jets sputter as the car sinks
-          : 1
-        : burnT > 0
-          ? Math.min(1, (burnT / burnMax) * 2.5)
-          : 0
+      ? car.retro
+        ? 1.5 // braking the drop off the ramp: long plumes
+        : car.thrusting
+          ? car.fuel <= 0
+            ? 0.35 + Math.random() * 0.3 // tank empty: the jets sputter as the car sinks
+            : 1
+          : burnT > 0
+            ? Math.min(1, (burnT / burnMax) * 2.5)
+            : 0
       : 0;
   player.downJets.visible = burn > 0;
   if (burn > 0) {
@@ -554,7 +914,7 @@ function frame(now: number): void {
       inner.matrixWorld,
       player.bottomNozzles,
       DOWN,
-      car.flipRemaining > 0 ? 2 : 1,
+      car.flipRemaining > 0 || car.retro ? 2 : 1,
     );
     if (car.flipRemaining > 0)
       thrusterStream(
@@ -601,17 +961,41 @@ function frame(now: number): void {
     dt,
   );
   cityView?.setWet(session.rainT > 0 ? Math.min(1, session.rainT / 2) : 0);
-  cityView?.update(wall, car.x, car.y);
+  // the camera, not the car: pedestrian cut-outs turn square to it, and the detailed buildings stream around it
+  cityView?.update(wall, kit.camera.position.x, -kit.camera.position.z);
   memes.markClips(known);
   memes.update(wall, kit.camera.position, car.x, car.y, fx, session.t);
   const tunnel = underRoof(city, car.x, car.y);
+  // off the ramp's lip until touchdown: a set shot from beside the ramp (north of it, low, in front of the foot),
+  // the C in profile and the stands behind, following the car as it drops (the chase camera would sit up behind
+  // the car on top of the ramp's upper arm, looking at concrete)
+  // just after a landing that set the rocket off: cut to its liftoff, from low on the floor beside the pad, and cut
+  // back once it is well up
+  const shot = memes.rocketShot(wall, cinePos, cineLook);
+  if (shot !== rocketShot) {
+    rocketShot = shot;
+    cam.reset();
+    hud.setCutaway(shot);
+  }
+  let cine: { pos: THREE.Vector3; look: THREE.Vector3 } | null = shot
+    ? { pos: cinePos, look: cineLook }
+    : null;
+  const st = city.stage;
+  if (!cine && rampFlight && st && car.state === "drive" && !car.grounded) {
+    const q = rampWorld(st.ramp, -14, 28);
+    cine = {
+      pos: cinePos.set(q.x, 9, -q.y),
+      look: cineLook.copy(player.root.position),
+    };
+  }
   cam.update(
     dt,
     player.root.position.clone(),
     car.heading,
     car,
-    tunnel ? CEIL_H - 0.7 : Infinity,
+    cameraRoof(tunnel),
     g.h,
+    cine,
   );
   keepCameraOutOfBuildings();
   if (import.meta.env.DEV && devCam) {
@@ -630,6 +1014,20 @@ function frame(now: number): void {
   );
   kit.adapt(dt);
   hud.update(session, dt);
+  // now and then a news story, while actually driving (a new commute restarts the news clock)
+  if (session.t < lastNewsT) {
+    lastNewsT = -1e9;
+    nextNewsT = 20;
+  }
+  if (
+    started &&
+    !lobby.isOpen &&
+    !paused &&
+    session.state === "run" &&
+    car.state === "drive" &&
+    session.t >= nextNewsT
+  )
+    newsFlash(Math.floor(Math.random() * NEWS.length));
   sfx.heartbeat(session.timeLeft, car.state === "drive");
   // dashcam face close-up when clearing a tall vehicle (camper / truck / bus / van), once per air phase
   if (car.grounded || car.state !== "drive") faceShown = false;
@@ -647,6 +1045,19 @@ function frame(now: number): void {
     }
   }
   kit.render();
+  // pictures of the frame just drawn (the canvas can be read until the browser presents it)
+  if (pendingPhoto) {
+    const url = snapshot(480, 0.85);
+    if (url) hud.showPhoto(url, pendingPhoto.caption, pendingPhoto.late);
+    if (!pendingPhoto.late) sfx.event("punch");
+    pendingPhoto = null;
+  }
+  while (pendingThumbs.length) {
+    const id = pendingThumbs.pop()!;
+    const url = snapshot(320, 0.75);
+    if (url) save("lr.thumb." + id, url); // the lobby shows your own shot of it
+  }
+  clip.setPaused(hud.paused);
   clip.capture();
 }
 requestAnimationFrame(frame);
@@ -711,7 +1122,7 @@ if (import.meta.env.DEV) {
     unlockAll(on = true) {
       known.clear();
       if (on) for (const c of CLIPS) known.add(c.id);
-      saveSet("lr.cards", known);
+      save("lr.cards", JSON.stringify([...known])); // a reset, not a merge
       if (lobby.isOpen) lobby.show(lobbyInfo());
     },
   };

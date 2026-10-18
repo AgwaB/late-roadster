@@ -280,9 +280,11 @@ export function buildPlayerCar(assets: Assets, color = 0xd62828): PlayerCar {
   const blob = blobShadowMesh(L + 0.6, W + 0.6);
   blob.name = "blob";
   root.add(blob);
+  // on root, not inner: the respawn blink hides inner, and a light that comes and goes changes every material's
+  // point-light count, so each blink frame used to compile a second program per material (mid-drive hitches)
   const headlight = new THREE.PointLight(0xffe2b8, 22, 32, 2);
-  headlight.position.set(L / 2 + 0.8, 1.0, 0);
-  inner.add(headlight);
+  headlight.position.set(L / 2 + 0.8, 1.0 - CAR_H / 2, 0);
+  root.add(headlight);
   return {
     root,
     wheels: [],
@@ -405,12 +407,24 @@ export class NpcRenderer {
       for (const im of g.meshes) {
         im.setMatrixAt(0, below);
         im.count = 1;
+        im.visible = true;
         im.instanceMatrix.needsUpdate = true;
       }
     }
   }
 
-  sync(npcs: readonly NpcPose[], ceilingCars?: readonly NpcPose[]): void {
+  /**
+   * Refill the instances from the NPC list. With a camera position (world x/z), cars farther than `far` metres are
+   * left out: the city runs ~200 cars, most of them out of sight, and every copy is a full model.
+   */
+  sync(
+    npcs: readonly NpcPose[],
+    ceilingCars?: readonly NpcPose[],
+    camX = 0,
+    camZ = 0,
+    far = Infinity,
+  ): void {
+    const far2 = far * far;
     for (const g of this.groups.values()) g.count = 0;
     // Read both lists directly; no per-frame concatenated array or counter Map.
     const total = npcs.length + (ceilingCars?.length ?? 0);
@@ -418,6 +432,9 @@ export class NpcRenderer {
       const n =
         index < npcs.length ? npcs[index] : ceilingCars![index - npcs.length];
       if (n.dead) continue;
+      const dx = n.x - camX,
+        dz = -n.y - camZ;
+      if (dx * dx + dz * dz > far2) continue;
       const g = this.ensure(n.kind);
       if (!g) continue;
       const i = g.count;
@@ -437,6 +454,7 @@ export class NpcRenderer {
       const c = g.count;
       for (const im of g.meshes) {
         im.count = c;
+        im.visible = c > 0; // an empty batch still costs a program switch per pass
         im.instanceMatrix.needsUpdate = true;
       }
     }

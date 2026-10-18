@@ -105,6 +105,8 @@ export class HazardRenderer {
   private rainVis = 0;
   private m4 = new THREE.Matrix4();
   private q = new THREE.Quaternion();
+  private q2 = new THREE.Quaternion();
+  private v = new THREE.Vector3();
   private e = new THREE.Euler();
   private p = new THREE.Vector3();
   private s = new THREE.Vector3(1, 1, 1);
@@ -112,6 +114,9 @@ export class HazardRenderer {
 
   /** round-3 scooter riders S_02..S_07 (first three seen from behind, last three from the front) */
   private riders: THREE.InstancedMesh[] = [];
+  /** round-5 cyclists: BK_R1..5 from behind, then BK_F1..5 from the front (one per jersey colour) */
+  private cyclers: THREE.InstancedMesh[] = [];
+  private cyclerN = new Array(10).fill(0);
   /** per-variant crate colour (a tint over the cardboard photo, or flat colours without it) */
   private crateTints: number[] = CRATE_FLAT;
   private riderN = [0, 0, 0, 0, 0, 0];
@@ -167,6 +172,30 @@ export class HazardRenderer {
         im.frustumCulled = false;
         scene.add(im);
         this.riders.push(im);
+      }
+    // camera-facing photo cut-outs of the cycling club (fallback: the low-poly bikes above)
+    const bTex = ["R", "F"].flatMap((v) =>
+      [1, 2, 3, 4, 5].map((i) => tex?.("BK_" + v + i)),
+    );
+    if (bTex.every((t) => t && (t.image as { width?: number })?.width))
+      for (const t of bTex as THREE.Texture[]) {
+        const img = t.image as { width: number; height: number };
+        const h = 1.78,
+          w = (h * img.width) / img.height;
+        const im = new THREE.InstancedMesh(
+          new THREE.PlaneGeometry(w, h).translate(0, h / 2, 0),
+          new THREE.MeshStandardMaterial({
+            map: t,
+            alphaTest: 0.5,
+            side: THREE.DoubleSide,
+            roughness: 0.8,
+          }),
+          CAP,
+        );
+        im.count = 0;
+        im.frustumCulled = false;
+        scene.add(im);
+        this.cyclers.push(im);
       }
     // spilled cargo: cardboard boxes (round-4 CR_01 face on every side)
     const box = tex?.("CR_01");
@@ -267,11 +296,39 @@ export class HazardRenderer {
       nk = 0;
     for (const h of hazards) {
       this.p.set(h.x, 0, -h.y);
-      if (h.kind === "cyclist") {
+      if (h.kind === "cyclist" && this.cyclers.length) {
+        // billboard about the vertical axis, a gentle bob with the pedal stroke; the back of the rider when the
+        // pack rides away from the camera (as it does in front of the player), the front when it comes towards it
+        const dx = camX - this.p.x,
+          dz = camZ - this.p.z;
+        const toward = Math.cos(h.heading) * dx - Math.sin(h.heading) * dz > 0;
+        const k = (Math.abs(h.variant) % 5) + (toward ? 5 : 0);
+        if (this.cyclerN[k] < CAP) {
+          this.q.setFromAxisAngle(UP, Math.atan2(dx, dz));
+          if (h.hit) {
+            // knocked flying: tumble about the view axis around the rider's middle, then lie on its side
+            const roll = h.roll ?? 0;
+            this.q.multiply(this.q2.setFromAxisAngle(FWD, roll));
+            const mid =
+              (h.z ?? 0) +
+              0.89 * Math.abs(Math.cos(roll)) +
+              0.3 * Math.abs(Math.sin(roll));
+            this.v.set(0, 0.89, 0).applyQuaternion(this.q);
+            this.p.set(h.x - this.v.x, mid - this.v.y, -h.y - this.v.z);
+          } else this.p.y = 0.025 * Math.abs(Math.sin(h.phase * 5));
+          this.m4.compose(this.p, this.q, this.s);
+          this.cyclers[k].setMatrixAt(this.cyclerN[k]++, this.m4);
+        }
+      } else if (h.kind === "cyclist") {
         if (nk >= CAP) continue;
-        // a little bob and lean with the pedal stroke
-        this.p.y = 0.02 * Math.sin(h.phase * 6);
-        this.e.set(0.06 * Math.sin(h.phase * 3), h.heading, 0, "YXZ");
+        // a little bob and lean with the pedal stroke (knocked: flying and rolling over)
+        this.p.y = h.hit ? (h.z ?? 0) : 0.02 * Math.sin(h.phase * 6);
+        this.e.set(
+          h.hit ? (h.roll ?? 0) : 0.06 * Math.sin(h.phase * 3),
+          h.heading,
+          0,
+          "YXZ",
+        );
         this.q.setFromEuler(this.e);
         this.m4.compose(this.p, this.q, this.s);
         this.bikes.setMatrixAt(nk, this.m4);
@@ -294,13 +351,26 @@ export class HazardRenderer {
         const k = (Math.abs(h.variant) % 3) + (toward ? 3 : 0);
         if (this.riderN[k] < CAP) {
           this.q.setFromAxisAngle(UP, yaw);
+          if (h.hit) {
+            // knocked flying, as the cyclists: tumble about the view axis around the middle, then lie down
+            const roll = h.roll ?? 0;
+            this.q.multiply(this.q2.setFromAxisAngle(FWD, roll));
+            const mid =
+              (h.z ?? 0) +
+              0.92 * Math.abs(Math.cos(roll)) +
+              0.3 * Math.abs(Math.sin(roll));
+            this.v.set(0, 0.92, 0).applyQuaternion(this.q);
+            this.p.set(h.x - this.v.x, mid - this.v.y, -h.y - this.v.z);
+          }
           this.s.set(right ? -1 : 1, 1, 1);
           this.m4.compose(this.p, this.q, this.s);
           this.s.set(1, 1, 1);
           this.riders[k].setMatrixAt(this.riderN[k]++, this.m4);
         }
       } else if (h.kind === "scooter" && ns < CAP) {
-        this.q.setFromAxisAngle(UP, h.heading);
+        if (h.hit) this.p.y = h.z ?? 0;
+        this.e.set(h.hit ? (h.roll ?? 0) : 0, h.heading, 0, "YXZ");
+        this.q.setFromEuler(this.e);
         this.m4.compose(this.p, this.q, this.s);
         this.scooters.setMatrixAt(ns, this.m4);
         this.scooters.setColorAt(
@@ -342,6 +412,10 @@ export class HazardRenderer {
     this.riders.forEach((im, k) => {
       fin(im, this.riderN[k], false);
       this.riderN[k] = 0;
+    });
+    this.cyclers.forEach((im, k) => {
+      fin(im, this.cyclerN[k], false);
+      this.cyclerN[k] = 0;
     });
     fin(this.crates, nc, true);
     fin(this.bikes, nk, false);
@@ -412,3 +486,5 @@ export class HazardRenderer {
   }
 }
 const UP = new THREE.Vector3(0, 1, 0);
+/** a billboard's own facing axis (its roll axis) */
+const FWD = new THREE.Vector3(0, 0, 1);

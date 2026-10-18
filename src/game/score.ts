@@ -16,6 +16,8 @@ export interface Clip {
   caption: string;
   /** marker colour on the minimap and the beam in the world (clips tied to a place) */
   color?: string;
+  /** shown when the car reaches the clip's beam: what to press, right there */
+  hint?: string;
 }
 export const CLIPS: readonly Clip[] = [
   {
@@ -24,6 +26,7 @@ export const CLIPS: readonly Clip[] = [
     how: "Fly over the toll plaza",
     caption: "Flyers don't pay. The queue is still at the booth.",
     color: "#ffd23f",
+    hint: "Hold SPACE before the canopy and fly over it",
   },
   {
     id: "park",
@@ -31,6 +34,7 @@ export const CLIPS: readonly Clip[] = [
     how: "Land on the toll canopy roof",
     caption: "Parked on top of the toll plaza. Ticket pending.",
     color: "#ff8a3d",
+    hint: "Hold SPACE to fly up, then come down on the canopy roof",
   },
   {
     id: "ramp",
@@ -38,6 +42,7 @@ export const CLIPS: readonly Clip[] = [
     how: "Ride the event ramp over its lip",
     caption: "Up the wall, over the top, back down on four wheels.",
     color: "#ff4b5c",
+    hint: "Drive at the ramp foot straight and fast (SHIFT helps)",
   },
   {
     id: "kickflip",
@@ -45,6 +50,7 @@ export const CLIPS: readonly Clip[] = [
     how: "Flip over the event's vehicle row",
     caption: "Five vehicles, one barrel roll, not a scratch.",
     color: "#ff5cd6",
+    hint: "Jump the row along the run-in, tap SPACE again to flip, land past it",
   },
   {
     id: "ceiling",
@@ -52,13 +58,15 @@ export const CLIPS: readonly Clip[] = [
     how: "Drive the tunnel ceiling (E)",
     caption: "Upside down through the tunnel. Read the sticker.",
     color: "#3fd7ff",
+    hint: "Press E in the tunnel to drive on the ceiling",
   },
   {
     id: "skyway",
     title: "SKYWAY",
-    how: "Land on the elevated skyway",
-    caption: "Skipped the on-ramp. Straight onto the deck.",
+    how: "Get up onto the elevated skyway",
+    caption: "Up the on-ramp, over the jam.",
     color: "#6f8bff",
+    hint: "Keep to the inner lane: the skyway's on-ramp starts by the median",
   },
   {
     id: "hop",
@@ -92,12 +100,16 @@ export const CLIPS: readonly Clip[] = [
     caption: "Two flips, one jump, wheels down.",
   },
   {
+    // id kept as "news" so clips filmed before the rename stay filmed
     id: "news",
-    title: "BREAKING NEWS",
-    how: "Crash once",
-    caption: "Made the morning news. The insurer stopped watching.",
+    title: "WIPEOUT",
+    how: "Wipe out once (river, sinkhole or a flying car)",
+    caption: "Three seconds and some dignity, gone.",
   },
 ];
+
+/** The clips FREE ROAM asks for: every stunt clip (the WIPEOUT one is a souvenir, nobody should have to crash for it). */
+export const FREE_ROAM_CLIPS = CLIPS.filter((c) => c.id !== "news");
 
 /** Where the clips tied to a place are filmed: the minimap dots and the light beams in the world (h: ground there). */
 export function clipSpots(
@@ -111,7 +123,7 @@ export function clipSpots(
   }
   const st = city.stage;
   if (st) {
-    const f = rampWorld(st.ramp, -8, 0);
+    const f = rampWorld(st.ramp, -24, 0); // on the approach, clear of the upper arm overhead
     out.push({ id: "ramp", x: f.x, y: f.y, h: C.CURB_H });
     const r = stageAt(st, st.rowS);
     out.push({ id: "kickflip", x: r.x, y: r.y, h: C.CURB_H });
@@ -125,11 +137,32 @@ export function clipSpots(
   });
   out.push({
     id: "skyway",
-    x: city.skyway.x0 + 40,
+    x: city.skyway.x0 + city.skyway.ramp + 50, // just past the top of the west ramp
     y: city.skyway.y,
     h: city.skyway.h,
   });
   return out;
+}
+
+/**
+ * Where the HUD tells you how to film a clip (src/ui/hud.ts, within its hint radius): the clip spots, plus the
+ * approaches to the skyway's two on-ramps (the beam on the deck is only seen once you are past them, so its hint is
+ * up there only; under the deck it would send you the wrong way). minH: lowest car height the hint shows at.
+ */
+export function hintSpots(
+  city: City,
+): { id: string; x: number; y: number; minH: number }[] {
+  const sw = city.skyway;
+  return [
+    ...clipSpots(city).map((p) => ({
+      id: p.id,
+      x: p.x,
+      y: p.y,
+      minH: p.id === "skyway" ? p.h - 2 : -Infinity,
+    })),
+    { id: "skyway", x: sw.x0 - 45, y: sw.y, minH: -Infinity },
+    { id: "skyway", x: sw.x1 + 45, y: sw.y, minH: -Infinity },
+  ];
 }
 
 /** VIEWS per stunt (before the chain multiplier) and per second of air / ceiling time. */
@@ -144,10 +177,12 @@ export const VIEWS = {
   ramp: 80_000,
   kickflip: 60_000,
   ceilingOn: 10_000,
+  /** passing a ceiling-lane car while driving the ceiling yourself */
+  overtake: 8_000,
   skyway: 20_000,
   sinkhole: 15_000,
   refill: 10_000,
-  crash: 30_000,
+  crash: 5_000,
   airPerS: 2_000,
   ceilingPerS: 3_000,
 } as const;
@@ -228,7 +263,9 @@ export class Tracker {
     if (car.state === "crash") {
       for (const e of ev)
         if (e.startsWith("crash:")) {
+          // a small consolation (less than any stunt), never multiplied by the chain it just broke
           this.clip("news");
+          this.chain = 0;
           this.award(VIEWS.crash);
           this.chain = 0;
         }
@@ -256,6 +293,7 @@ export class Tracker {
         this.clip("peloton");
         this.award(VIEWS.peloton);
       } else if (k === "ceil" && v === "on") this.award(VIEWS.ceilingOn);
+      else if (k === "overtake") this.award(VIEWS.overtake);
     }
     if (flips > 0) {
       if (flips >= 2) this.clip("reset");

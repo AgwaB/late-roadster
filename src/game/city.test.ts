@@ -10,7 +10,10 @@ import {
   roadAt,
   shortestPath,
   snapToLane,
+  straightOn,
+  PARKED_KINDS,
 } from "./city";
+import { VEHICLE_DIMS } from "./dims";
 
 const city = buildCity(1);
 
@@ -85,5 +88,46 @@ describe("city", () => {
     expect(loc.dir).toBe(1);
     expect(loc.s).toBeCloseTo(30);
     expect(loc.lane).toBe(0);
+  });
+
+  it("parked and queueing cars are as big as the model drawn for them (a van's roof is a van's roof)", () => {
+    const cars = city.props.filter(
+      (p) => p.kind === "parked" || p.kind === "jamcar",
+    );
+    expect(cars.length).toBeGreaterThan(50);
+    const kinds = new Set<string>();
+    for (const p of cars) {
+      const kind = PARKED_KINDS[p.variant ?? -1];
+      expect(kind).toBeDefined();
+      kinds.add(kind);
+      const d = VEHICLE_DIMS[kind];
+      const w = p.box.x1 - p.box.x0,
+        l = p.box.y1 - p.box.y0;
+      const [long, short] = w >= l ? [w, l] : [l, w];
+      expect(long).toBeCloseTo(2 * d.halfL, 5);
+      expect(short).toBeCloseTo(2 * d.halfW, 5);
+      expect(p.h).toBe(d.h);
+    }
+    expect(kinds.size).toBeGreaterThan(4);
+  });
+
+  it("goes straight on across a junction along a row, and stops at the map's edge", () => {
+    const e = city.edges.find(
+      (q) =>
+        q.axis === "x" &&
+        city.nodes[q.a].x === 200 &&
+        city.nodes[q.a].y === -400,
+    )!;
+    const on = straightOn(city, e, 1)!;
+    expect(city.nodes[on.edge.a].x).toBe(400);
+    expect(on.edge.axis).toBe("x");
+    expect(on.dir).toBe(1);
+    const last = city.edges.find(
+      (q) =>
+        q.axis === "x" &&
+        Math.max(city.nodes[q.a].x, city.nodes[q.b].x) === C.CITY_HALF &&
+        city.nodes[q.a].y === -400,
+    )!;
+    expect(straightOn(city, last, 1)).toBeNull();
   });
 });

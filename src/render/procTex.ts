@@ -806,7 +806,7 @@ export function stockChartTexture(variant: number): THREE.CanvasTexture {
   return t;
 }
 
-/** Green sign hung under the skyway's west end: tells players the deck is reachable with E. */
+/** Green sign over the foot of each skyway ramp: this lane goes up onto the deck. */
 export function skywaySignTexture(): THREE.CanvasTexture {
   const W = 1024,
     H = 256;
@@ -837,7 +837,7 @@ export function skywaySignTexture(): THREE.CanvasTexture {
   g.fillText("SKYWAY", 560, 108);
   g.font = "700 56px system-ui, sans-serif";
   g.fillStyle = "#ffd23f";
-  g.fillText("PRESS E", 560, 200);
+  g.fillText("ON-RAMP", 560, 200);
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;

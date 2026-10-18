@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildCity, edgePose, locateOnRoad } from "./city";
+import { buildCity, edgePose, inRiver, locateOnRoad } from "./city";
 import * as C from "./constants";
 import { NO_INPUT } from "./physics";
 import { Session } from "./session";
+import { SKY_CAR, skyCarAt } from "./skylane";
+import { PLAZA } from "./toll";
 
 const city = buildCity(1);
 const DT = 1 / 120;
@@ -17,19 +19,29 @@ function isolatedSession(seed = 42): Session {
 }
 
 describe("audit logic regressions", () => {
-  it("#7 failed landing, wreck replay and respawn use only the session seed", () => {
+  it("a botched landing is never a wipe-out: back on its wheels, most of the speed gone", () => {
+    const s = isolatedSession();
+    Object.assign(s.car, { h: 0.001, vH: -2, grounded: false, spin: Math.PI });
+    const v0 = s.car.v;
+    const events = s.step(DT, NO_INPUT);
+    expect(events).toContain("land:rough");
+    expect(events.some((e) => e.startsWith("crash:"))).toBe(false);
+    expect(s.car.state).toBe("drive");
+    expect([s.car.pitch, s.car.roll, s.car.spin]).toEqual([0, 0, 0]);
+    expect(s.car.v).toBeLessThan(v0 * 0.5);
+  });
+
+  it("#7 a wreck (into the river), its replay and the respawn use only the session seed", () => {
+    let ry = 0;
+    for (let y = 5; y < 300 && !ry; y += 1) if (inRiver(city, 0, y)) ry = y;
+    expect(ry).toBeGreaterThan(0);
     const run = (globalRandom: number) => {
       const random = vi.spyOn(Math, "random").mockReturnValue(globalRandom);
       try {
         const s = isolatedSession();
-        Object.assign(s.car, {
-          h: 0.001,
-          vH: -2,
-          grounded: false,
-          spin: Math.PI,
-        });
+        Object.assign(s.car, { x: 0, y: ry, h: 0.5, vH: -2, grounded: false });
         const events = s.step(DT, NO_INPUT);
-        expect(events).toContain("crash:land");
+        expect(events).toContain("crash:splash");
         const states = [structuredClone(s.car)];
         for (let i = 0; i < (C.CRASH_REPLAY + 0.2) / DT; i++) {
           events.push(...s.step(DT, NO_INPUT));
@@ -89,5 +101,23 @@ describe("audit logic regressions", () => {
     expect(ev).not.toContain("late");
     expect(s.result!.finished).toBe(true);
     expect(s.t).toBe(C.RUN_TIME);
+  });
+
+  it("the sky lane arches over the toll plaza out of reach of a car jetting off the canopy roof", () => {
+    // full jet flight from the canopy roof tops out at roof + THRUST_MAX_H, plus the body
+    const reach = PLAZA.top + C.THRUST_MAX_H + C.CAR_ROOF;
+    let over = 0;
+    for (let t = 0; t < 60; t += 0.05)
+      city.sky.forEach((s, i) => {
+        const p = skyCarAt(s, i, t);
+        if (Math.abs(p.x - C.TOLL_X) > PLAZA.canopyHalfX + C.CAR_HALF_L + 4)
+          return;
+        over++;
+        expect(p.hc - SKY_CAR.H / 2).toBeGreaterThan(reach + 0.2);
+      });
+    expect(over).toBeGreaterThan(100);
+    // away from the plaza (its west end) it is still where a high flight meets it
+    const p = skyCarAt({ ...city.sky[0], ph: 0 }, 0, 0);
+    expect(p.hc).toBeLessThan(C.THRUST_MAX_H + 1);
   });
 });

@@ -5,22 +5,33 @@
 import type { AABB } from "./city";
 import { CURB_H } from "./constants";
 
-/** Hook ramp profile in its own frame: u along the run-in (toward the wall), z up. */
+/**
+ * Hook ramp profile in its own frame: u along the run-in (toward the wall), z up. Matched to the reveal-night clips:
+ * a full "C" seen side on. A broad foot curves up off the floor, a vertical, then the top curls all the way over to
+ * level and runs on as a long upper arm out over the run-in (the car rides its underside upside down and drops off
+ * its end), hung from the truss boom that runs the length of that arm.
+ */
 export const RAMP = {
-  /** radius of the bottom curve, flat to vertical (tight, as on the night: a short foot under a tall wall) */
-  R: 6,
+  /** radius of the bottom curve, flat to vertical */
+  R: 8,
   /** straight vertical section */
-  VERT: 9,
-  /** radius of the curl at the top that leans back over the run-in (the "C" seen from the side) */
-  r: 6,
-  HOOK: (55 * Math.PI) / 180,
+  VERT: 4,
+  /**
+   * radius of the curl at the top, vertical to level: the upper half of the "C" is the bigger one in the clips
+   * (seen from the foot, more of the wall rises above its waist than below it)
+   */
+  r: 11,
+  HOOK: Math.PI / 2,
+  /** the long level upper arm past the curl, out over the run-in: its end hangs 15 m out past the foot */
+  TOP: 12,
   /** half width of the riding surface */
   HALF: 3,
   /** truss tower depth behind the wall */
-  TOWER: 4.5,
+  TOWER: 3.2,
 } as const;
 /** arc length from the foot of the curve to the lip */
-export const RAMP_END = (RAMP.R * Math.PI) / 2 + RAMP.VERT + RAMP.r * RAMP.HOOK;
+export const RAMP_END =
+  (RAMP.R * Math.PI) / 2 + RAMP.VERT + RAMP.r * RAMP.HOOK + RAMP.TOP;
 
 /** Surface point at arc length s from the foot: u along the run, z height, th the surface's climb angle. */
 export function rampPoint(s: number): { u: number; z: number; th: number } {
@@ -32,11 +43,21 @@ export function rampPoint(s: number): { u: number; z: number; th: number } {
     return { u: R * Math.sin(p), z: R * (1 - Math.cos(p)), th: p };
   }
   if (s <= a1 + VERT) return { u: R, z: R + (s - a1), th: Math.PI / 2 };
-  const q = Math.min(HOOK, (s - a1 - VERT) / r);
+  const a2 = a1 + VERT + r * HOOK;
+  if (s <= a2) {
+    const q = (s - a1 - VERT) / r;
+    return {
+      u: R - r + r * Math.cos(q),
+      z: R + VERT + r * Math.sin(q),
+      th: Math.PI / 2 + q,
+    };
+  }
+  // the straight upper arm, on along the curl's end tangent (level for a quarter curl)
+  const d = Math.min(s, RAMP_END) - a2;
   return {
-    u: R - r + r * Math.cos(q),
-    z: R + VERT + r * Math.sin(q),
-    th: Math.PI / 2 + q,
+    u: R - r + r * Math.cos(HOOK) - Math.sin(HOOK) * d,
+    z: R + VERT + r * Math.sin(HOOK) + Math.cos(HOOK) * d,
+    th: Math.PI / 2 + HOOK,
   };
 }
 /** height of the lip (~20.3 m) */
@@ -79,7 +100,7 @@ export interface Solid {
 
 /** The ramp body as stepped boxes: the filled curve (only a wall ride gets onto it), the wall, the hook, the tower. */
 export function rampSolids(r: WallRamp): Solid[] {
-  const { R, VERT, r: hr, HOOK, HALF, TOWER } = RAMP;
+  const { R, VERT, r: hr, HALF, TOWER } = RAMP;
   const curve = (u: number) => R - Math.sqrt(Math.max(0, R * R - u * u));
   const box = (u0: number, u1: number, w: number): AABB => {
     const a = rampWorld(r, u0, -w),
@@ -93,13 +114,10 @@ export function rampSolids(r: WallRamp): Solid[] {
   };
   const out: Solid[] = [];
   const w = HALF + 0.4;
-  for (const [u0, u1] of [
-    [2.5, 4.5],
-    [4.5, 6.5],
-    [6.5, 8],
-    [8, 9.2],
-    [9.2, R],
-  ])
+  // the filled foot as steps, finer where it gets steep
+  for (const [u0, u1] of [0.3, 0.55, 0.75, 0.87, 0.95, 1].flatMap((f, i, a) =>
+    i ? [[a[i - 1] * R, f * R]] : [],
+  ))
     out.push({
       box: box(u0, u1, w),
       bottom: 0,
@@ -108,15 +126,16 @@ export function rampSolids(r: WallRamp): Solid[] {
       key: "ramp",
     });
   out.push({
-    box: box(R, R + TOWER, w + 1),
+    box: box(R, R + TOWER, w),
     bottom: 0,
-    top: RAMP_TOP + 2,
+    top: RAMP_TOP + 1,
     what: "ramp",
     key: "ramp",
   });
+  // the curl and the upper arm overhead
   out.push({
-    box: box(R - hr + hr * Math.cos(HOOK) - 0.3, R, w),
-    bottom: CURB_H + R + VERT,
+    box: box(rampPoint(RAMP_END).u - 0.3, R, w),
+    bottom: CURB_H + R + VERT + hr * 0.5,
     top: CURB_H + RAMP_TOP + 0.6,
     what: "ramp",
     key: "ramp",
@@ -178,6 +197,41 @@ export function grandstands(
     },
   ];
 }
+/**
+ * The event's big LED screen in the south-east corner of the floor, turned to the middle of it (and the road beyond):
+ * centre (x, y), facing yaw (game radians), w x h metres, its lower edge z up on two truss legs.
+ */
+export function eventScreen(fl: AABB): {
+  x: number;
+  y: number;
+  yaw: number;
+  w: number;
+  h: number;
+  z: number;
+} {
+  const x = fl.x1 - 16,
+    y = fl.y0 + 16;
+  const cx = (fl.x0 + fl.x1) / 2,
+    cy = (fl.y0 + fl.y1) / 2 + 30;
+  return { x, y, yaw: Math.atan2(cy - y, cx - x), w: 20, h: 11, z: 3.2 };
+}
+/**
+ * The launch pad on the west side of the floor, just north of the ramp approach and ~50 m ahead of a car coming down
+ * off the ramp (it lands heading west, the pad a little right of straight ahead, in the chase camera's view): a
+ * rocket stands on it and lifts off when the ramp is ridden.
+ */
+export function launchPad(fl: AABB): { x: number; y: number; half: number } {
+  return { x: fl.x0 + 36, y: fl.y1 - 60, half: 6 };
+}
+/** The display stage: a low round turntable with a roadster on show, in front of the south grandstand. */
+export function displayStage(fl: AABB): {
+  x: number;
+  y: number;
+  r: number;
+  h: number;
+} {
+  return { x: (fl.x0 + fl.x1) / 2 - 2, y: fl.y0 + 36, r: 6.5, h: 0.55 };
+}
 /** Floodlight towers (poles FLOOD_H tall) around the floor. */
 export const FLOOD_H = 19;
 export function floodlights(fl: AABB): { x: number; y: number }[] {
@@ -229,5 +283,41 @@ export function venueSolids(fl: AABB, ox: number, oy: number): Solid[] {
     });
   for (const p of floodlights(fl)) pole(p, 0.3, FLOOD_H + 2.5);
   for (const p of powerPoles(ox, oy)) pole(p, 0.25, 10);
+  // the launch pad (low slab) and its umbilical tower on the north side
+  const lp = launchPad(fl);
+  out.push({
+    box: {
+      x0: lp.x - lp.half,
+      x1: lp.x + lp.half,
+      y0: lp.y - lp.half,
+      y1: lp.y + lp.half,
+    },
+    bottom: 0,
+    top: 0.6,
+    what: "wall",
+    key: "launchpad",
+  });
+  pole({ x: lp.x, y: lp.y + lp.half + 1.6 }, 1.3, 36);
+  // the display stage (its square core: the rim is a low step)
+  const ds = displayStage(fl);
+  const hs = ds.r * 0.8;
+  out.push({
+    box: { x0: ds.x - hs, x1: ds.x + hs, y0: ds.y - hs, y1: ds.y + hs },
+    bottom: 0,
+    top: ds.h,
+    what: "wall",
+    key: "display",
+  });
+  // the LED screen's two truss legs (the screen itself is up out of reach)
+  const sc = eventScreen(fl);
+  for (const k of [-1, 1])
+    pole(
+      {
+        x: sc.x - Math.sin(sc.yaw) * k * (sc.w / 2 - 1),
+        y: sc.y + Math.cos(sc.yaw) * k * (sc.w / 2 - 1),
+      },
+      0.45,
+      sc.z + sc.h + 1,
+    );
   return out;
 }

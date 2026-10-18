@@ -66,25 +66,14 @@ describe("clips and VIEWS", () => {
     const known = new Set<string>();
     const s = new Session(city, 1, 0, 0, { known });
     quiet(s);
-    const tl = city.toll!;
-    Object.assign(s.car, {
-      x: tl.x - PLAZA.canopyHalfX - 4,
-      y: -6,
-      heading: 0,
-      v: 30,
-      h: PLAZA.bottom + 0.3,
-      grounded: false,
-      invuln: 0,
-    });
+    // one of the three accidents left: rolling into a sinkhole
+    const p = city.potholes[0];
+    Object.assign(s.car, { x: p.x, y: p.y, h: 0, v: 8, invuln: 0 });
     const ev: string[] = [];
-    for (let i = 0; i < 40 && s.car.state === "drive"; i++) {
-      s.car.vH = 0;
-      ev.push(...s.step(1 / 60, { ...NO_INPUT, accel: true }));
-    }
-    ev.push(...s.step(1 / 60, NO_INPUT));
-    expect(ev).toContain("crash:toll");
+    for (let i = 0; i < 4; i++) ev.push(...s.step(1 / 60, NO_INPUT));
+    expect(ev).toContain("crash:sinkhole");
     expect(ev).toContain("clip:news");
-    expect(s.lastCrash).toBe("toll");
+    expect(s.lastCrash).toBe("sinkhole");
     expect(known.has("news")).toBe(true);
   });
 
@@ -213,7 +202,7 @@ describe("clips and VIEWS", () => {
     expect(tr.chain).toBe(0);
   });
 
-  it("the cycling club: ride into it and you crash, hop it and you film PELOTON", () => {
+  it("the cycling club: ride into it and the riders go flying (no wipe-out), hop it and you film PELOTON", () => {
     const run = (hop: boolean) => {
       const s = new Session(city, 1, 0, 0);
       quiet(s);
@@ -233,7 +222,9 @@ describe("clips and VIEWS", () => {
       c.v = 30;
       c.invuln = 0;
       const ev: string[] = [];
+      let flew = 0;
       for (let i = 0; i < 60 * 6 && c.state === "drive"; i++) {
+        flew = Math.max(flew, ...pack.map((h) => h.z ?? 0));
         const lead = Math.min(
           ...pack.map(
             (h) =>
@@ -244,11 +235,19 @@ describe("clips and VIEWS", () => {
         const jump = hop && lead < 11 && lead > 9 && c.grounded;
         ev.push(...s.step(1 / 60, { ...NO_INPUT, accel: true, jump }));
       }
-      return ev;
+      return Object.assign(ev, {
+        flew,
+        state: c.state,
+        hit: pack.filter((h) => h.hit).length,
+      });
     };
-    const crashEv = run(false);
-    expect(crashEv).toContain("crash:cyclist");
-    expect(crashEv).not.toContain("clip:peloton");
+    const plough = run(false);
+    expect(plough.some((e) => e.startsWith("crash:"))).toBe(false);
+    expect(plough.state).toBe("drive");
+    expect(plough).toContain("bump:cyclist");
+    expect(plough.hit).toBeGreaterThan(0);
+    expect(plough.flew).toBeGreaterThan(1.5); // knocked up into the air
+    expect(plough).not.toContain("clip:peloton");
     const hopEv = run(true);
     expect(hopEv.some((e) => e.startsWith("crash:"))).toBe(false);
     expect(hopEv).toContain("over:peloton");

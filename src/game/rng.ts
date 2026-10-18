@@ -18,7 +18,10 @@ function hashStr(s: string): number {
   return h >>> 0;
 }
 
-/** Same seed for everyone on the same calendar day: "today's commute". */
+/** Same seed for everyone on the same (local) calendar day: "today's commute" changes at the player's midnight. */
 export function dailySeed(date = new Date()): number {
-  return hashStr(date.toISOString().slice(0, 10));
+  const p = (n: number) => String(n).padStart(2, "0");
+  return hashStr(
+    date.getFullYear() + "-" + p(date.getMonth() + 1) + "-" + p(date.getDate()),
+  );
 }

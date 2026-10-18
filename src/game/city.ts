@@ -5,6 +5,7 @@ import { mulberry32 } from "./rng";
 import { dijkstra, shortestPath } from "./graph";
 import { buildSigns, type CitySigns } from "./signs";
 import { buildSkyLane, type SkyCar } from "./skylane";
+import { VEHICLE_DIMS } from "./dims";
 import { PLAZA, tollCanopy, tollQueue, tollSolids } from "./toll";
 import {
   PLINTH,
@@ -62,6 +63,8 @@ export interface Prop {
   color?: number;
   /** parked: index into PARKED_KINDS; stagecar: index into ROW (src/game/venue.ts) */
   variant?: number;
+  /** base height when it does not stand on the road (the jam up on the skyway deck); h is then above it */
+  z0?: number;
 }
 export interface Ramp {
   box: AABB;
@@ -85,6 +88,8 @@ export interface Edge {
   len: number;
   crossing: boolean;
   noNpc: { s0: number; s1: number; dir: 1 | -1 }[];
+  /** lowest lane traffic may use here (the skyway's end ramps take the inner lane of both directions) */
+  laneMin?: number;
 }
 export interface Commute {
   home: Node;
@@ -96,13 +101,23 @@ export interface Zone extends AABB {
   kind: "construction" | "jam";
 }
 
-/** Elevated deck along one row: surface at SKY_H, piers in the median underneath. */
+/**
+ * Elevated deck along one row: level at SKY_H on piers in the median, and at each end a solid ramp (one lane each
+ * way, over the inner lanes) down to the road, widening into the full deck over the taper.
+ */
 export interface Skyway {
   x0: number;
   x1: number;
   y: number;
+  /** half width of the full deck, incl. parapets */
   half: number;
   h: number;
+  /** length of each end ramp: x0 .. x0 + ramp climbs from the road to the deck, x1 - ramp .. x1 drops back */
+  ramp: number;
+  /** half width of the ramps, incl. parapets */
+  rampHalf: number;
+  /** length over which the deck widens from the ramp to its full width */
+  taper: number;
   piers: AABB[];
 }
 
@@ -247,6 +262,22 @@ export function buildCity(seed = 1): City {
         if (C.CROSSINGS.includes(n.j)) link(n, nodes[right], "x", true);
       } else link(n, nodes[right], "x", false);
     }
+  }
+
+  // the skyway's end ramps stand in the inner lane of both directions: traffic keeps to lane 1 and out on those roads
+  const skyway = buildSkyway();
+  for (const e of edges) {
+    const a = nodes[e.a],
+      b = nodes[e.b];
+    if (e.axis !== "x" || a.y !== skyway.y) continue;
+    const lo = Math.min(a.x, b.x),
+      hi = Math.max(a.x, b.x);
+    const over = (u0: number, u1: number) => lo < u1 && hi > u0;
+    if (
+      over(skyway.x0, skyway.x0 + skyway.ramp) ||
+      over(skyway.x1 - skyway.ramp, skyway.x1)
+    )
+      e.laneMin = 1;
   }
 
   const river: AABB = {
@@ -552,7 +583,10 @@ export function buildCity(seed = 1): City {
   const zones: Zone[] = [];
   const candidates = edges.filter(
     (e) =>
-      !e.crossing && Math.abs(nodes[e.a].i) <= 3 && Math.abs(nodes[e.a].j) <= 3,
+      !e.crossing &&
+      !e.laneMin &&
+      Math.abs(nodes[e.a].i) <= 3 &&
+      Math.abs(nodes[e.a].j) <= 3,
   );
   for (let n = 0; n < 3; n++) {
     const e = candidates.splice(Math.floor(rnd() * candidates.length), 1)[0];
@@ -646,6 +680,41 @@ export function buildCity(seed = 1): City {
     }
     void b;
   }
+  // the skyway deck is jammed in the middle ("over the jam"): standing cars in all four lanes, with gaps to weave
+  // through, or a roof-to-roof stomp across them (the session treats them like the tunnel jam, z0 up on the deck)
+  {
+    const sw = skyway;
+    const lanes = [-5.5, -2.05, 2.05, 5.5];
+    let k = 0;
+    for (
+      let x = sw.x0 + sw.ramp + sw.taper + 50;
+      x < sw.x1 - sw.ramp - sw.taper - 40;
+      x += 8.5
+    )
+      lanes.forEach((ly, li) => {
+        k++;
+        if ((k * 7 + li * 3) % 10 < 3) return; // a gap
+        const variant = (k * 5 + li) % PARKED_KINDS.length;
+        const d = VEHICLE_DIMS[PARKED_KINDS[variant]];
+        const cx = x + (((k * 13) % 5) - 2) * 0.4;
+        props.push({
+          id: pid++,
+          kind: "jamcar",
+          box: {
+            x0: cx - d.halfL,
+            y0: sw.y + ly - d.halfW,
+            x1: cx + d.halfL,
+            y1: sw.y + ly + d.halfW,
+          },
+          h: d.h,
+          z0: sw.h,
+          heading: ly < 0 ? 0 : Math.PI,
+          hit: false,
+          stomped: false,
+          variant,
+        });
+      });
+  }
   // tunnel jam: eastbound lanes blocked for 60 m in the middle
   {
     const yc = C.TUNNEL_ROW * C.P;
@@ -655,17 +724,25 @@ export function buildCity(seed = 1): City {
       for (const lane of [0, 1, 2, 3]) {
         const ly =
           yc - C.laneOffset(lane) + ((x * 7 + lane * 13) % 5) / 10 - 0.2;
-        addProp(
-          "jamcar",
-          {
-            x0: x - C.CAR_HALF_L + lane * 2,
-            y0: ly - 1.0,
-            x1: x + C.CAR_HALF_L + lane * 2,
-            y1: ly + 1.0,
+        // a mix of kinds, each as big as its model
+        const variant = (pid * 7) % PARKED_KINDS.length;
+        const d = VEHICLE_DIMS[PARKED_KINDS[variant]];
+        const cx = x + lane * 2;
+        props.push({
+          id: pid++,
+          kind: "jamcar",
+          box: {
+            x0: cx - d.halfL,
+            y0: ly - d.halfW,
+            x1: cx + d.halfL,
+            y1: ly + d.halfW,
           },
-          1.6,
-          0,
-        );
+          h: d.h,
+          heading: 0,
+          hit: false,
+          stomped: false,
+          variant,
+        });
       }
     zones.push({
       kind: "jam",
@@ -694,8 +771,8 @@ export function buildCity(seed = 1): City {
       ) {
         if (rnd() > 0.28) continue;
         const p = edgePoseRaw(e, a, nodes[e.b], dir, s, off);
-        const hl = 2.3,
-          hw = 0.95;
+        const variant = Math.floor(rnd() * PARKED_KINDS.length);
+        const { halfL: hl, halfW: hw, h } = VEHICLE_DIMS[PARKED_KINDS[variant]];
         const box: AABB =
           e.axis === "x"
             ? { x0: p.x - hl, y0: p.y - hw, x1: p.x + hl, y1: p.y + hw }
@@ -704,11 +781,11 @@ export function buildCity(seed = 1): City {
           id: pid++,
           kind: "parked" as PropKind,
           box,
-          h: 1.5,
+          h,
           heading: p.heading,
           hit: false,
           stomped: false,
-          variant: Math.floor(rnd() * PARKED_KINDS.length),
+          variant,
         };
         props.push(prop);
       }
@@ -738,23 +815,33 @@ export function buildCity(seed = 1): City {
           y1 = dir > 0 ? -C.MEDIAN_HALF : C.ROADWAY_HALF;
         addProp("toll", { x0: x - 0.4, y0, x1: x + 0.4, y1 }, 0.8, Math.PI / 2);
       }
-      for (const q of tollQueue(toll))
+      // the queue is spaced for car-sized bodies between the booth islands: no vans, pickups or wide SUVs in it
+      const fits = PARKED_KINDS.flatMap((k, i) =>
+        VEHICLE_DIMS[k].halfL <= C.CAR_HALF_L &&
+        VEHICLE_DIMS[k].halfW <= C.CAR_HALF_W + 0.05
+          ? [i]
+          : [],
+      );
+      for (const q of tollQueue(toll)) {
+        const variant =
+          fits[(q.k * 3 + q.lane * 5 + (q.dir > 0 ? 0 : 1)) % fits.length];
+        const d = VEHICLE_DIMS[PARKED_KINDS[variant]];
         props.push({
           id: pid++,
           kind: "jamcar",
           box: {
-            x0: q.x - C.CAR_HALF_L,
-            y0: q.y - C.CAR_HALF_W,
-            x1: q.x + C.CAR_HALF_L,
-            y1: q.y + C.CAR_HALF_W,
+            x0: q.x - d.halfL,
+            y0: q.y - d.halfW,
+            x1: q.x + d.halfL,
+            y1: q.y + d.halfW,
           },
-          h: 1.6,
+          h: d.h,
           heading: q.dir > 0 ? 0 : Math.PI,
           hit: false,
           stomped: false,
-          variant:
-            (q.k * 3 + q.lane * 5 + (q.dir > 0 ? 0 : 1)) % PARKED_KINDS.length,
+          variant,
         });
+      }
       // NPC traffic does not queue: ordinary cars "take a detour" past it, fellow roadsters fly over it
       const back =
         PLAZA.firstCar + (PLAZA.cars - 1) * PLAZA.carGap + C.CAR_HALF_L + 8;
@@ -870,8 +957,9 @@ export function buildCity(seed = 1): City {
     zones,
     commutes,
     treeSpots,
-    skyway: buildSkyway(),
+    skyway,
   };
+  solids.push(...skywaySolids(skyway));
   city.potholes = buildPotholes(city);
   city.signs = buildSigns(city);
   return city;
@@ -898,8 +986,13 @@ function buildPotholes(city: City): Pothole[] {
   }
   const out: Pothole[] = [];
   [...use.keys()]
-    // not on the bridges, nor under the toll queue
-    .filter((id) => !city.edges[id].crossing && id !== city.toll?.edge)
+    // not on the bridges, under the toll queue, nor beside the skyway's ramps
+    .filter(
+      (id) =>
+        !city.edges[id].crossing &&
+        !city.edges[id].laneMin &&
+        id !== city.toll?.edge,
+    )
     .sort((a, b) => use.get(b)!.n - use.get(a)!.n)
     .slice(0, 14)
     .forEach((id, j) => {
@@ -965,10 +1058,12 @@ export function inRiver(city: City, x: number, y: number): boolean {
 
 function buildSkyway(): Skyway {
   const piers: AABB[] = [];
-  // a pier every 40 m in the median, but never inside a crossing intersection
+  // a pier every 40 m in the median under the level deck (the ramps are solid), never inside a crossing intersection
   for (let x = C.SKY_X0 + 20; x <= C.SKY_X1 - 20; x += 40) {
     const node = Math.round(x / C.P) * C.P;
     if (Math.abs(x - node) < C.ROAD_HALF + 2) continue;
+    if (x < C.SKY_X0 + C.SKY_RAMP + 2 || x > C.SKY_X1 - C.SKY_RAMP - 2)
+      continue;
     piers.push({ x0: x - 0.8, y0: -0.8, x1: x + 0.8, y1: 0.8 });
   }
   return {
@@ -977,14 +1072,99 @@ function buildSkyway(): Skyway {
     y: 0,
     half: C.SKY_HALF,
     h: C.SKY_H,
+    ramp: C.SKY_RAMP,
+    rampHalf: C.SKY_RAMP_HALF,
+    taper: C.SKY_TAPER,
     piers,
   };
 }
 
-/** Over the skyway deck footprint (any height)? */
-export function onSkyway(city: City, x: number, y: number): boolean {
-  const s = city.skyway;
-  return x >= s.x0 && x <= s.x1 && Math.abs(y - s.y) <= s.half;
+/**
+ * The skyway's cross-section at x: surface height, its gradient along x (signed: + climbs toward +x), half width
+ * incl. parapets, and whether it stands on a solid ramp (else the deck slab on piers). Null off its length.
+ * The ramps follow an S-curve (smoothstep), level at both ends, so nothing launches the car at the top or bottom.
+ */
+export function skywayAt(
+  s: Skyway,
+  x: number,
+): { h: number; grade: number; half: number; ramp: boolean } | null {
+  if (x < s.x0 || x > s.x1) return null;
+  const west = x - s.x0 <= s.x1 - x;
+  const d = west ? x - s.x0 : s.x1 - x;
+  if (d < s.ramp) {
+    const q = d / s.ramp;
+    const g = (6 * s.h * q * (1 - q)) / s.ramp;
+    return {
+      h: s.h * q * q * (3 - 2 * q),
+      grade: west ? g : -g,
+      half: s.rampHalf,
+      ramp: true,
+    };
+  }
+  const k = Math.min(1, (d - s.ramp) / s.taper);
+  return {
+    h: s.h,
+    grade: 0,
+    half: s.rampHalf + (s.half - s.rampHalf) * k,
+    ramp: false,
+  };
+}
+
+/** Parapet thickness on the skyway and its ramps (their outer faces are the half widths), and height above the road. */
+export const SKY_PARAPET = { t: 0.45, h: 1.0 } as const;
+
+/**
+ * Sideways push (in y) that takes a body of half width hw, spanning bottom..top in height, at (x, y) out of the
+ * skyway's parapet walls (the outer face runs down to the road beside a ramp, the deck's fascia beside the deck), or
+ * null when clear. A body on the deck / ramp is kept on it, one outside is kept off; over the top of a parapet
+ * (a hop) it passes.
+ */
+export function skywayParapet(
+  s: Skyway,
+  x: number,
+  y: number,
+  hw: number,
+  bottom: number,
+  top: number,
+): number | null {
+  const k = skywayAt(s, x);
+  if (!k) return null;
+  const lo = k.ramp ? 0 : k.h - 1.4,
+    hi = k.h + SKY_PARAPET.h;
+  if (top <= lo || bottom >= hi) return null;
+  const dy = y - s.y,
+    a = Math.abs(dy),
+    inner = k.half - SKY_PARAPET.t;
+  if (a + hw <= inner || a - hw >= k.half) return null;
+  const sg = dy < 0 ? -1 : 1;
+  return a < k.half - SKY_PARAPET.t / 2
+    ? sg * (inner - hw) - dy
+    : sg * (k.half + hw) - dy;
+}
+
+/**
+ * The ramps' solid bodies as steps (5 m long, from the road up to a metre under the surface, so a car on the ramp
+ * never touches them): a car beside a ramp, or under the deck in the inner lane, runs into the concrete.
+ */
+function skywaySolids(s: Skyway): Solid[] {
+  const out: Solid[] = [];
+  const step = 5;
+  for (const west of [true, false])
+    for (let d = 0; d < s.ramp - 1e-6; d += step) {
+      const d1 = Math.min(s.ramp, d + step);
+      const x0 = west ? s.x0 + d : s.x1 - d1,
+        x1 = west ? s.x0 + d1 : s.x1 - d;
+      const top = skywayAt(s, west ? x0 : x1)!.h - 1;
+      if (top < 0.2) continue;
+      out.push({
+        box: { x0, y0: s.y - s.rampHalf, x1, y1: s.y + s.rampHalf },
+        bottom: 0,
+        top,
+        what: "parapet",
+        key: "skyway",
+      });
+    }
+  return out;
 }
 
 export function inTunnel(city: City, x: number, y: number): boolean {
@@ -998,8 +1178,18 @@ export function groundAt(
   /** current height of whatever stands here: at deck level over the skyway the deck is the ground */
   h?: number,
 ): { h: number; slope: number; axis: "x" | "y"; dir: number } {
-  if (h !== undefined && h >= city.skyway.h - 1.5 && onSkyway(city, x, y))
-    return { h: city.skyway.h, slope: 0, axis: "x", dir: 1 };
+  if (h !== undefined) {
+    // the skyway: its ramps from a metre under their surface up (solid underneath), the deck from 1.5 m under it
+    const sw = city.skyway;
+    const k = skywayAt(sw, x);
+    if (k && Math.abs(y - sw.y) <= k.half && h >= k.h - (k.ramp ? 1 : 1.5))
+      return {
+        h: k.h,
+        slope: Math.abs(k.grade),
+        axis: "x",
+        dir: k.grade < 0 ? -1 : 1,
+      };
+  }
   if (h !== undefined)
     for (const d of city.decks)
       if (h >= d.h - 1.5 && inBox(d.box, x, y))
@@ -1042,6 +1232,21 @@ export function onRoadway(x: number, y: number): boolean {
     hExists &&
     Math.abs(x) <= lim;
   return v || h;
+}
+
+/** The road straight on past this edge's end in the travel direction (the same row / column), or null at a T. */
+export function straightOn(
+  city: City,
+  edge: Edge,
+  dir: 1 | -1,
+): { edge: Edge; dir: 1 | -1 } | null {
+  const node = city.nodes[dir > 0 ? edge.b : edge.a];
+  for (const id of node.edges) {
+    const e = city.edges[id];
+    if (e === edge || e.axis !== edge.axis) continue;
+    return { edge: e, dir: e.a === node.id ? 1 : -1 };
+  }
+  return null;
 }
 
 /** Snap a pose to the nearest lane center on the nearest road, heading along the road. */

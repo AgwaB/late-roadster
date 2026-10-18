@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Box3, Matrix4, Vector3 } from "three";
-import { buildCity, type AABB } from "./city";
+import { buildCity, skywayAt, type AABB } from "./city";
 import * as C from "./constants";
 import { carSpan, newCar } from "./physics";
 import { Session } from "./session";
@@ -60,8 +60,10 @@ describe("shared overhead-sign placements", () => {
         ).toBe(false);
       for (const g of p.led) expect(g.eid).not.toBe(tl.edge);
       expect([p.direction.length, p.wrecks.length, p.led.length]).toEqual([
-        120, 16, 14,
+        120, 40, 14,
       ]);
+      // about one gantry in three carries a wreck, along the commutes too
+      expect(p.wrecks.length / p.direction.length).toBeCloseTo(1 / 3, 1);
     },
   );
 
@@ -141,7 +143,7 @@ describe("shared overhead-sign placements", () => {
         -0.32,
       ]);
     });
-    expect(signs.colliders.length).toBe(541);
+    expect(signs.colliders.length).toBe(565); // one collider per wreck: 40 wrecks now (was 16)
   });
 });
 
@@ -168,12 +170,12 @@ describe("height-aware sign contacts", () => {
   });
 
   it.each(["board", "arm", "led-board", "tunnel-board"] as const)(
-    "crashes when flying fast into a %s",
+    "bounces off (a hard hit, never a wipe-out) when flying fast into a %s",
     (kind) => {
       const c = ofKind(kind)[0],
         s = sessionAt(c, c.bottom + 0.1, 30);
-      expect(s["collideStatic"](true)).toEqual(["crash:sign"]);
-      expect(s.car.state).toBe("crash");
+      expect(s["collideStatic"](true)).toEqual(["hit:sign"]);
+      expect(s.car.state).toBe("drive");
     },
   );
 
@@ -181,7 +183,7 @@ describe("height-aware sign contacts", () => {
     "hits a %s at ground level",
     (kind) => {
       const s = sessionAt(ofKind(kind)[0], 0, 5);
-      expect(s["collideStatic"](true)).toEqual(["wall"]);
+      expect(s["collideStatic"](true)).toEqual(["scrape"]);
       expect(s.car.state).toBe("drive");
     },
   );
@@ -198,7 +200,7 @@ describe("height-aware sign contacts", () => {
     });
     const board = ofKind("board").find((b) => b.structure === c.structure)!;
     expect(s["penetration"](board.box)).toBeNull();
-    expect(s["collideStatic"](true)).toEqual(["wall"]);
+    expect(s["collideStatic"](true)).toEqual(["scrape"]);
   });
 
   it("uses the rotated carSpan rather than a fixed roof height", () => {
@@ -207,7 +209,7 @@ describe("height-aware sign contacts", () => {
     s.car.pitch = Math.PI / 2;
     expect(s.car.h + C.CAR_ROOF).toBeLessThan(c.bottom);
     expect(carSpan(s.car).top).toBeGreaterThan(c.bottom);
-    expect(s["collideStatic"](true)).toEqual(["wall"]);
+    expect(s["collideStatic"](true)).toEqual(["scrape"]);
   });
 
   it("passes above the entire structure", () => {
@@ -219,7 +221,7 @@ describe("height-aware sign contacts", () => {
   it("resolves contact but does not crash through a closed crash gate", () => {
     const c = ofKind("board")[0],
       s = sessionAt(c, 6, 30);
-    expect(s["collideStatic"](false)).toEqual(["wall"]);
+    expect(s["collideStatic"](false)).toEqual(["scrape"]);
     expect(s.car.state).toBe("drive");
   });
 
@@ -227,7 +229,7 @@ describe("height-aware sign contacts", () => {
     const c = ofKind("board")[0],
       s = sessionAt(c, 6);
     s["contactEffects"] = new Set();
-    expect(s["collideStatic"](true)).toEqual(["wall"]);
+    expect(s["collideStatic"](true)).toEqual(["scrape"]);
     const leg = ofKind("post").find((p) => p.structure === c.structure)!;
     s.car = sessionAt(leg, 0).car;
     const heading = s.car.heading,
@@ -237,11 +239,12 @@ describe("height-aware sign contacts", () => {
     expect(s["penetration"](leg.box)).toBeNull();
   });
 
-  it("keeps every skyway driving lane clear at deck height", () => {
+  it("keeps every skyway driving lane clear on the deck and its ramps", () => {
     const s = sessionAt(ofKind("board")[0], city.skyway.h);
     for (let x = city.skyway.x0; x <= city.skyway.x1; x += 2) {
+      const h = skywayAt(city.skyway, x)!.h;
       for (const y of [-C.laneOffset(0), C.laneOffset(0)]) {
-        Object.assign(s.car, { x, y, heading: 0 });
+        Object.assign(s.car, { x, y, h, heading: 0 });
         expect(s["collideStatic"](true)).toEqual([]);
       }
     }

@@ -39,8 +39,6 @@ export interface Env {
   tunnel(x: number, y: number): boolean;
   /** Highest the car may fly here at height h (e.g. under the skyway deck); Infinity when open sky. */
   ceiling?(x: number, y: number, h: number): number;
-  /** Target of an E press here outside a tunnel (climb onto / drop off the skyway), or null if none. */
-  skyway?(x: number, y: number, h: number): { y1: number; h1: number } | null;
   /** the event hook ramp: drive onto its foot square and fast enough and the car rides the wall */
   wallRamp?: WallRamp | null;
   respawn(c: Car): void;
@@ -97,10 +95,12 @@ export interface Car {
   /** hold-Space jets carrying the car this step (visuals) / already fired during this air phase (sound cue) */
   thrusting: boolean;
   thrustOn: boolean;
+  /** coming down off the ramp's lip: the jets right the car and brake the fall until it lands */
+  rampDrop: boolean;
+  /** those jets are braking the fall this step (visuals) */
+  retro: boolean;
   /** s left of the straight-up flip launch before the rotation starts */
   flipDelay: number;
-  /** scripted skyway climb / drop in progress (E next to the elevated deck) */
-  shift: { t: number; y0: number; y1: number; h0: number; h1: number } | null;
   /** riding the event hook ramp: s = arc length up the surface, v = speed along it, w = offset across it */
   wall: { s: number; v: number; w: number } | null;
   /** s after leaving the ramp lip during which the ramp body does not collide (the car starts inside its box) */
@@ -159,8 +159,9 @@ export function newCar(x: number, y: number, heading: number): Car {
     ceilH0: 0,
     thrusting: false,
     thrustOn: false,
+    rampDrop: false,
+    retro: false,
     flipDelay: 0,
-    shift: null,
     wall: null,
     wallGrace: 0,
     pit: null,
@@ -214,9 +215,9 @@ export function crashCar(c: Car, reason: string, rnd: () => number): string {
   const vel = velocity(c);
   c.state = "crash";
   c.crashT = 0;
-  c.shift = null;
   c.thrusting = false;
   c.thrustOn = false;
+  c.rampDrop = c.retro = false;
   c.flipDelay = 0;
   c.flyTime = 0;
   c.flyHeld = false;
@@ -278,9 +279,9 @@ export function placeCar(
   c.vLat = 0;
   c.yawRate = 0;
   c.kickYaw = 0;
-  c.shift = null;
   c.thrusting = false;
   c.thrustOn = false;
+  c.rampDrop = c.retro = false;
   c.flipDelay = 0;
   c.flyTime = 0;
   c.flyHeld = false;
@@ -461,40 +462,6 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
   c.y += vel.vy * dt;
 
   // ---- vertical
-  // skyway climb / drop (started by E below): a scripted thruster arc, no gravity or input until it lands
-  if (c.shift) {
-    const s = c.shift;
-    s.t += dt;
-    const u = Math.min(1, s.t / C.SKY_SHIFT);
-    const smooth = (k: number) => {
-      const q = C.clamp(k, 0, 1);
-      return q * q * (3 - 2 * q);
-    };
-    if (s.h1 > s.h0) {
-      // up: rise past the deck edge (overshooting a little), slide over it in the second half, settle on top
-      c.h = s.h0 + (s.h1 - s.h0) * smooth(u) + 1.6 * Math.sin(Math.PI * u);
-      c.y = s.y0 + (s.y1 - s.y0) * smooth((u - 0.35) / 0.5);
-    } else {
-      // down: hop out over the parapet first, then drop to the road
-      c.y = s.y0 + (s.y1 - s.y0) * smooth(u / 0.4);
-      c.h = s.h0 + (s.h1 - s.h0) * u * u + 1.0 * Math.sin(Math.PI * u);
-    }
-    c.vH = 0;
-    c.grounded = false;
-    c.pitch = 0;
-    c.roll += (0 - c.roll) * Math.min(1, 10 * dt);
-    if (u >= 1) {
-      c.shift = null;
-      c.h = s.h1;
-      c.y = s.y1;
-      c.grounded = true;
-      c.lastSlope = 0;
-      ev.push("land:clean");
-    }
-    c.jumpLatch = inp.jump;
-    c.stickLatch = inp.stick;
-    return ev;
-  }
   // the event hook ramp: rolling onto its foot square to the wall and fast enough, the suction takes over
   if (c.grounded && !c.ceiling && env.wallRamp && c.v > 12) {
     const r = env.wallRamp;
@@ -555,18 +522,6 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
     c.flips = 0;
     c.bursts = 0;
     ev.push("ceil:on");
-  } else if (stickEdge && env.skyway) {
-    // outside a tunnel E switches level at the skyway: thruster climb onto the deck, or a drop back down
-    const t = env.skyway(c.x, c.y, c.h);
-    if (t) {
-      c.shift = { t: 0, y0: c.y, y1: t.y1, h0: c.h, h1: t.h1 };
-      c.vLat = 0;
-      c.spin = 0;
-      c.flipRemaining = 0;
-      c.flips = 0;
-      c.bursts = 0;
-      ev.push(t.h1 > c.h ? "skyway:up" : "skyway:down");
-    }
   }
 
   if (!c.ceiling) {
@@ -672,6 +627,21 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
           ev.push("thrust");
         }
       }
+      // down off the ramp's lip: the jets brake the fall (unless the player flies it on the jets), as in the reveal
+      c.retro = false;
+      if (c.rampDrop && !c.thrusting) {
+        const limit = -(C.DROP_TOUCH_V + C.DROP_K * Math.max(0, c.h - g.h));
+        if (c.vH < limit) {
+          c.vH = Math.min(limit, c.vH + C.DROP_ACC * dt);
+          c.vH += C.GRAVITY * dt; // the jets carry the weight this step
+          c.v *= 1 - C.DROP_DRAG * dt;
+          if (!c.thrustOn) {
+            c.thrustOn = true;
+            ev.push("retro");
+          }
+          c.retro = true;
+        }
+      }
       c.vH -= C.GRAVITY * dt;
       c.h += c.vH * dt;
       if (c.flipDelay > 0) c.flipDelay -= dt;
@@ -685,7 +655,8 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
         }
       }
       if (c.roll !== 0) {
-        const step = (Math.PI / 0.45) * dt;
+        // (off the ramp the side jets roll it upright steadily, a balance rather than a flick)
+        const step = (Math.PI / (c.rampDrop ? C.DROP_ROLL_S : 0.45)) * dt;
         if (Math.abs(c.roll) <= step) c.roll = 0;
         else c.roll -= Math.sign(c.roll) * step;
       }
@@ -699,6 +670,7 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
         c.vH = 0;
         c.lastSlope = g.slope;
         c.thrustOn = false;
+        c.rampDrop = c.retro = false;
         c.flipDelay = 0;
         c.flyTime = 0;
         c.flyHeld = false;
@@ -719,7 +691,15 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
             ev.push("flip:" + completed);
           }
           ev.push(tilt < 0.17 ? "land:clean" : "land:ok");
-        } else ev.push(crashCar(c, "land", env.rnd));
+        } else {
+          // a botched landing is never a wipe-out: it slams back onto its wheels and loses most of its speed
+          c.pitch = 0;
+          c.roll = 0;
+          c.spin = 0;
+          c.v *= 0.35;
+          c.vLat = 0;
+          ev.push("land:rough");
+        }
       }
     }
   }
@@ -801,7 +781,10 @@ function stepWall(
     c.roll = Math.PI; // rights itself in the air (the roll recovery in stepCar)
     c.spin = 0;
     c.flips = 1;
-    c.bursts = C.FLIP_MAX;
+    c.rampDrop = true;
+    // one more flip is allowed on the way down (Space again): two in one jump, if it is all the way round by the floor
+    c.bursts = C.FLIP_MAX - 1;
+    c.spinAxis = [0, 0, 1];
     c.flipRemaining = 0;
     c.flyHeld = false;
     c.airPress = -1;

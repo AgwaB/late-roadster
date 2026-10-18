@@ -8,7 +8,9 @@ import {
   type Building,
   type City,
   type Prop,
+  SKY_PARAPET,
   shortestPath,
+  skywayAt,
 } from "../game/city";
 import type { LandmarkLayout } from "../game/landmarks";
 import { DIRECTION as D, LED } from "../game/signs";
@@ -926,13 +928,22 @@ export function buildCityView(
   });
 
   // ---- third-party model buildings on some lots (instanced per model part)
-  type Placement = { x: number; y: number; rot: number; s: number };
+  /** z: base height (rooftop billboards); 0 when omitted */
+  type Placement = { x: number; y: number; rot: number; s: number; z?: number };
   const streamed: {
     placements: Placement[];
     meshes: THREE.InstancedMesh[];
     r2: number;
   }[] = [];
-  const inst = (id: string, placements: Placement[], stream = false) => {
+  /**
+   * One InstancedMesh per model part. stream: true = only the copies near the camera are drawn (290 m, 170 m for the
+   * heavy euro_* blocks), a number = the same with that radius; false = all copies, always.
+   */
+  const inst = (
+    id: string,
+    placements: Placement[],
+    stream: boolean | number = false,
+  ) => {
     const model = assets.models.get(id);
     if (!model || !placements.length) return;
     const meshes: THREE.InstancedMesh[] = [];
@@ -943,7 +954,7 @@ export function buildCityView(
         placements.length,
       );
       placements.forEach((pl, i) => {
-        pos.set(pl.x, 0, -pl.y);
+        pos.set(pl.x, pl.z ?? 0, -pl.y);
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.rot);
         sc.setScalar(pl.s);
         m4.compose(pos, q, sc);
@@ -953,6 +964,7 @@ export function buildCityView(
       im.receiveShadow = true;
       if (stream) {
         im.count = 0;
+        im.visible = false;
         im.frustumCulled = false;
       }
       group.add(im);
@@ -962,7 +974,12 @@ export function buildCityView(
       streamed.push({
         placements,
         meshes,
-        r2: id.startsWith("euro") ? STREAM_R2_HEAVY : STREAM_R2,
+        r2:
+          typeof stream === "number"
+            ? stream * stream
+            : id.startsWith("euro")
+              ? STREAM_R2_HEAVY
+              : STREAM_R2,
       });
   };
   const STREAM_R2 = 290 * 290;
@@ -983,7 +1000,7 @@ export function buildCityView(
         const dx = pl.x - cx,
           dy = pl.y - cy;
         if (dx * dx + dy * dy > s.r2) continue;
-        pos.set(pl.x, 0, -pl.y);
+        pos.set(pl.x, pl.z ?? 0, -pl.y);
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), pl.rot);
         sc.setScalar(pl.s);
         m4.compose(pos, q, sc);
@@ -992,6 +1009,8 @@ export function buildCityView(
       }
       for (const im of s.meshes) {
         im.count = n;
+        // an empty batch still costs a program switch per pass: skip it
+        im.visible = n > 0;
         im.instanceMatrix.needsUpdate = true;
       }
     }
@@ -1224,6 +1243,32 @@ export function buildCityView(
         group.add(mesh);
         peds.push({ mesh, spots: list });
       });
+      // a soft contact shadow under every person, so the cut-outs stand on the pavement instead of floating on it
+      {
+        const all = pedSpots.flat();
+        if (all.length) {
+          const blobs = new THREE.InstancedMesh(
+            new THREE.PlaneGeometry(0.95, 0.7)
+              .rotateX(-Math.PI / 2)
+              .translate(0, 0.02, 0),
+            new THREE.MeshBasicMaterial({
+              map: blobShadowTexture(),
+              transparent: true,
+              depthWrite: false,
+              opacity: 0.85,
+            }),
+            all.length,
+          );
+          all.forEach((s, i) =>
+            blobs.setMatrixAt(
+              i,
+              new THREE.Matrix4().makeTranslation(s.x, s.z, -s.y),
+            ),
+          );
+          blobs.renderOrder = 1;
+          group.add(blobs);
+        }
+      }
       lTex.forEach((t, v) => {
         const list = panelMats[v];
         if (!t || !list.length) return;
@@ -1262,14 +1307,16 @@ export function buildCityView(
           ),
         );
     }
-    inst("57rxXzowK8w", lights);
-    inst("OWczicNWhO", stops);
-    inst("dOSjmdmKaxi", benches);
-    inst("i7HDuYDLkx", bins);
+    // street furniture is small: drawn within 260 m of the camera (fog has it half gone by then anyway)
+    inst("57rxXzowK8w", lights, 260);
+    inst("OWczicNWhO", stops, 260);
+    inst("dOSjmdmKaxi", benches, 200);
+    inst("i7HDuYDLkx", bins, 200);
     // billboards sit on roofs: raise by the building height via a second pass (model y offset)
     const bb = assets.models.get("e5jmUgocmaT");
     if (bb) {
       const mats: THREE.Matrix4[] = [];
+      const boardSpots: Placement[] = [];
       let i = 0;
       for (const b of city.buildings) {
         if (b.kind.includes("skyscraper") || i >= boards.length) continue;
@@ -1293,18 +1340,11 @@ export function buildCityView(
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), b.rotY);
         sc.setScalar(1);
         mats.push(new THREE.Matrix4().compose(pos, q, sc));
+        boardSpots.push({ x: b.cx, y: b.cy, rot: b.rotY, s: 1, z: h });
         i++;
       }
-      for (const p of bb.parts) {
-        const im = new THREE.InstancedMesh(
-          p.geometry,
-          p.material,
-          mats.length || 1,
-        );
-        mats.forEach((m, k) => im.setMatrixAt(k, m));
-        im.count = mats.length;
-        group.add(im);
-      }
+      // the board frames (~1.9k triangles each) only within 480 m; the poster planes stay everywhere (4 triangles)
+      inst("e5jmUgocmaT", boardSpots, 480);
       // advert faces: the model's panel is blank; hang a fictional-brand poster on its front (model front = -x)
       const N_ADS = 8; // 6 brand adverts + 2 loop-the-loop stock charts (one board in four shows a chart)
       const adGeo = mergeGeometries(
@@ -1968,7 +2008,7 @@ export function buildCityView(
           s: 1,
         });
     });
-    inst("scooter_r3", list);
+    inst("scooter_r3", list, 220);
   }
   if (miscParts.length) {
     const misc = new THREE.Mesh(
@@ -2010,9 +2050,10 @@ export function buildCityView(
         y: (p.box.y0 + p.box.y1) / 2,
         rot: p.heading,
         s: 1,
+        z: p.z0, // the jam up on the skyway deck
       });
     }
-    for (const [id, list] of byId) inst(id, list, false);
+    for (const [id, list] of byId) inst(id, list, 320); // parked cars: near the camera only
     if (parkedList.length) {
       // soft contact shadows so the parked rows do not float
       const bg = new THREE.PlaneGeometry(5.2, 2.6)
@@ -2028,7 +2069,11 @@ export function buildCityView(
         parkedList.length,
       );
       parkedList.forEach((p, i) => {
-        pos.set((p.box.x0 + p.box.x1) / 2, 0, -(p.box.y0 + p.box.y1) / 2);
+        pos.set(
+          (p.box.x0 + p.box.x1) / 2,
+          p.z0 ?? 0,
+          -(p.box.y0 + p.box.y1) / 2,
+        );
         q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.heading);
         sc.setScalar(1);
         m4.compose(pos, q, sc);
@@ -2875,7 +2920,7 @@ export function buildCityView(
           );
     // sign gantries: nose through the board, tail up over the lanes, a torn flap hanging, chunks on the road
     const use = (eid: number) => routeUse.get(eid) ?? 0;
-    // sign wrecks: the busiest commute-route gantries first, a few elsewhere for free roamers
+    // sign wrecks: about one gantry in three (src/game/signs.ts)
     const gantryPick = city.signs.wrecks;
     // building crashes: a car buried nose-first in a facade (most a floor or two up, flown in; some through the
     // shopfront), on the busiest commute roads first and a few elsewhere
@@ -3148,7 +3193,7 @@ export function buildCityView(
       );
   }
 
-  // ---- skyway: elevated deck over the y = 0 arterial east of the tunnel (E climbs on / drops off)
+  // ---- skyway: elevated deck over the y = 0 arterial east of the tunnel, a ramp up from the inner lane at each end
   let ticker: THREE.Texture | null = null;
   {
     const sw = city.skyway;
@@ -3175,23 +3220,137 @@ export function buildCityView(
       under(b, y0, tile),
     ];
     const conc: THREE.BufferGeometry[] = [];
-    const deck: B = {
-      x0: sw.x0,
-      y0: sw.y - sw.half,
-      x1: sw.x1,
-      y1: sw.y + sw.half,
+    type P3 = [number, number, number]; // game x, y, height
+    /**
+     * A sheet through rows of cross-section points (the same count in every row), with world-scale UVs (top: x, y;
+     * side: along the face, height). It faces the way the rows wind: rising columns along +x face -y, rows along +y
+     * with rising columns face +x, columns along +y in rows along +x face up.
+     */
+    const sheet = (rows: P3[][], tile: number, flat: boolean) => {
+      const pos: number[] = [],
+        uv: number[] = [],
+        idx: number[] = [];
+      const nj = rows[0].length;
+      for (const r of rows)
+        for (const [x, y, z] of r) {
+          pos.push(x, z, -y);
+          uv.push(flat ? x / tile : (x + y) / tile, (flat ? y : z) / tile);
+        }
+      for (let i = 0; i + 1 < rows.length; i++)
+        for (let j = 0; j + 1 < nj; j++) {
+          const a = i * nj + j,
+            b = a + nj;
+          idx.push(a, b, b + 1, a, b + 1, a + 1);
+        }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      return g;
     };
-    conc.push(walls(deck, top - bottom, 6).translate(0, bottom, 0));
-    conc.push(under(deck, bottom, 6)); // the deck soffit, seen from the road
-    for (const s of [-1, 1]) {
-      const y0 = sw.y + s * sw.half;
-      const y1 = y0 - s * 0.45;
+    // cross-sections along it: fine over the ramps and tapers, one span over the level full-width deck
+    const r0 = sw.x0 + sw.ramp,
+      r1 = sw.x1 - sw.ramp;
+    const t0 = r0 + sw.taper,
+      t1 = r1 - sw.taper;
+    const span = (a: number, b: number, n: number) =>
+      Array.from({ length: n }, (_, i) => a + ((b - a) * i) / n);
+    const xs = [
+      ...span(sw.x0, r0, 48),
+      ...span(r0, t0, 10),
+      ...span(t0, t1, 1),
+      ...span(t1, r1, 10),
+      ...span(r1, sw.x1, 48),
+      sw.x1,
+    ];
+    const rampW = xs.filter((x) => x <= r0),
+      deckXs = xs.filter((x) => x >= r0 && x <= r1),
+      rampE = xs.filter((x) => x >= r1);
+    // the surface (a few cm proud of the road paint at the ramp feet, flush with the physics up on the deck)
+    const at = (x: number) => {
+      const k = skywayAt(sw, x)!;
+      return { ...k, z: k.h + 0.035 * (1 - k.h / sw.h) };
+    };
+    const PT = SKY_PARAPET.t,
+      PH = SKY_PARAPET.h;
+    for (const sg of [-1, 1]) {
+      const yIn = (k: { half: number }) => sw.y + sg * (k.half - PT),
+        yOut = (k: { half: number }) => sw.y + sg * k.half;
+      // the parapet: inner face toward the road, its top, the outer face down to the road beside a ramp (the
+      // retaining wall) or over the deck's fascia
       conc.push(
-        ...solid(
-          { x0: sw.x0, y0: Math.min(y0, y1), x1: sw.x1, y1: Math.max(y0, y1) },
-          top,
-          top + 1.0,
+        sheet(
+          xs.map((x) => {
+            const k = at(x);
+            const lo: P3 = [x, yIn(k), k.z],
+              hi: P3 = [x, yIn(k), k.z + PH];
+            return sg > 0 ? [lo, hi] : [hi, lo];
+          }),
           6,
+          false,
+        ),
+        sheet(
+          xs.map((x) => {
+            const k = at(x);
+            const a: P3 = [x, yIn(k), k.z + PH],
+              b: P3 = [x, yOut(k), k.z + PH];
+            return sg > 0 ? [a, b] : [b, a];
+          }),
+          6,
+          true,
+        ),
+      );
+      for (const part of [rampW, deckXs, rampE]) {
+        const solidBelow = part !== deckXs;
+        conc.push(
+          sheet(
+            part.map((x) => {
+              const k = at(x);
+              const lo: P3 = [x, yOut(k), solidBelow ? 0 : k.h - 1.4],
+                hi: P3 = [x, yOut(k), k.z + PH];
+              return sg > 0 ? [hi, lo] : [lo, hi];
+            }),
+            6,
+            false,
+          ),
+        );
+      }
+    }
+    // the deck soffit seen from the road, and the ramps' concrete ends facing the road under the deck
+    conc.push(
+      sheet(
+        deckXs.map((x) => {
+          const k = at(x);
+          return [
+            [x, sw.y + k.half, k.h - 1.4],
+            [x, sw.y - k.half, k.h - 1.4],
+          ];
+        }),
+        6,
+        true,
+      ),
+    );
+    for (const [x, dir] of [
+      [r0, 1],
+      [r1, -1],
+    ]) {
+      const z = sw.h - 1.4,
+        w = sw.rampHalf * dir;
+      conc.push(
+        sheet(
+          [
+            [
+              [x, sw.y - w, 0],
+              [x, sw.y - w, z],
+            ],
+            [
+              [x, sw.y + w, 0],
+              [x, sw.y + w, z],
+            ],
+          ],
+          6,
+          false,
         ),
       );
     }
@@ -3216,21 +3375,50 @@ export function buildCityView(
     cm.receiveShadow = true;
     group.add(cm);
     const road = new THREE.Mesh(
-      quad(deck.x0, deck.y0, deck.x1, deck.y1, top, 8),
+      sheet(
+        xs.map((x) => {
+          const k = at(x);
+          return [
+            [x, sw.y - k.half + PT, k.z],
+            [x, sw.y + k.half - PT, k.z],
+          ];
+        }),
+        8,
+        true,
+      ),
       asphalt,
     );
     road.receiveShadow = true;
     group.add(road);
-    // lane paint: double yellow centre line, dashed lane split, solid edge lines
+    // lane paint, following the ramps: double yellow centre line, solid edge lines, the dashed lane split where the
+    // deck is two lanes each way
     const paint: THREE.BufferGeometry[] = [];
+    const stripe = (off: (half: number) => number, w: number, col: number) =>
+      paint.push(
+        colored(
+          sheet(
+            xs.map((x) => {
+              const k = at(x);
+              const c = sw.y + off(k.half);
+              return [
+                [x, c - w / 2, k.z + 0.02],
+                [x, c + w / 2, k.z + 0.02],
+              ];
+            }),
+            4,
+            true,
+          ),
+          col,
+        ),
+      );
     const line = (x0: number, x1: number, y: number, w: number, col: number) =>
       paint.push(
         colored(quad(x0, y - w / 2, x1, y + w / 2, top + 0.02, 4), col),
       );
     for (const s of [-1, 1]) {
-      line(sw.x0, sw.x1, sw.y + s * 0.18, 0.14, 0xf2c230);
-      line(sw.x0, sw.x1, sw.y + s * (sw.half - 0.9), 0.16, 0xf4f4f4);
-      for (let x = sw.x0 + 4; x < sw.x1 - 6; x += 12)
+      stripe(() => s * 0.18, 0.14, 0xf2c230);
+      stripe((half) => s * (half - 0.9), 0.16, 0xf4f4f4);
+      for (let x = t0 + 4; x < t1 - 6; x += 12)
         line(x, x + 6, sw.y + s * 3.9, 0.14, 0xf4f4f4);
     }
     group.add(
@@ -3239,21 +3427,39 @@ export function buildCityView(
         new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 }),
       ),
     );
-    // the hint sign hangs under the west end, facing traffic coming out of the tunnel
+    // a sign portal over each ramp's foot, its posts on the parapets, facing the traffic about to go up
     const signTex = skywaySignTexture();
-    const sign = new THREE.Mesh(
-      new THREE.PlaneGeometry(13, 3.25),
+    const signMat = new THREE.MeshStandardMaterial({
+      map: signTex,
+      roughness: 0.5,
+      emissive: 0xffffff,
+      emissiveMap: signTex,
+      emissiveIntensity: 0.25,
+    });
+    const frame: THREE.BufferGeometry[] = [];
+    for (const dir of [1, -1]) {
+      const x = dir > 0 ? sw.x0 + 14 : sw.x1 - 14;
+      const z = at(x).z + PH;
+      const yp = sw.rampHalf - PT / 2;
+      for (const s of [-1, 1])
+        frame.push(box(0.28, 6.6, 0.28, x, z + 3.3, -(sw.y + s * yp)));
+      frame.push(box(0.3, 0.3, 2 * yp + 0.3, x, z + 6.45, -sw.y));
+      frame.push(box(0.12, 1.9, 7.3, x, z + 5.2, -sw.y)); // the panel's back
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(7.2, 1.8), signMat);
+      sign.rotation.y = (-dir * Math.PI) / 2; // faces the foot (-x at the west ramp)
+      sign.position.set(x - dir * 0.07, z + 5.2, -sw.y);
+      group.add(sign);
+    }
+    const portal = new THREE.Mesh(
+      mergeGeometries(frame, false)!,
       new THREE.MeshStandardMaterial({
-        map: signTex,
+        color: 0x6b6f78,
+        metalness: 0.6,
         roughness: 0.5,
-        emissive: 0xffffff,
-        emissiveMap: signTex,
-        emissiveIntensity: 0.25,
       }),
     );
-    sign.rotation.y = -Math.PI / 2; // faces -x (west)
-    sign.position.set(sw.x0 - 0.05, bottom - 1.7, -sw.y);
-    group.add(sign);
+    portal.castShadow = true;
+    group.add(portal);
   }
 
   const boardRDST = stockBoardTexture(0); // shared by the tunnel board and the road gantries
@@ -3486,8 +3692,17 @@ export function buildCityView(
           up = new THREE.Vector3(0, 1, 0);
         for (const { mesh, spots } of peds) {
           spots.forEach((s, i) => {
-            pq.setFromAxisAngle(up, Math.atan2(camX - s.x, -camY + s.y));
-            pm.compose(pp.set(s.x, s.z, -s.y), pq, ps);
+            // square on to the camera (never edge-on, so never a sliver of paper), and stepped 0.35 m toward it
+            // so the far edge does not sink into the wall or fence the person stands in front of
+            const dx = camX - s.x,
+              dy = camY - s.y,
+              d = Math.hypot(dx, dy) || 1;
+            pq.setFromAxisAngle(up, Math.atan2(dx, -dy));
+            pm.compose(
+              pp.set(s.x + (dx / d) * 0.35, s.z, -(s.y + (dy / d) * 0.35)),
+              pq,
+              ps,
+            );
             mesh.setMatrixAt(i, pm);
           });
           mesh.instanceMatrix.needsUpdate = true;
@@ -3609,17 +3824,36 @@ function laneLines(city: City): THREE.Mesh {
       );
     };
     {
-      const p = along((s0 + s1) / 2),
-        L = s1 - s0,
-        w = C.MEDIAN_HALF * 2 - 0.2;
-      parts.push(
-        colored(
-          e.axis === "x"
-            ? box(L, 0.3, w, p.x, 0.15, -p.y)
-            : box(w, 0.3, L, p.x, 0.15, -p.y),
-          0x9a9da6,
-        ),
-      );
+      // the median kerb, broken where a skyway ramp stands on it
+      const sw = city.skyway;
+      const cuts =
+        e.axis === "x" && a.y === sw.y
+          ? [
+              [sw.x0, sw.x0 + sw.ramp],
+              [sw.x1 - sw.ramp, sw.x1],
+            ].map(([u, v]) => [u - a.x, v - a.x])
+          : [];
+      const pieces: [number, number][] = [];
+      let from = s0;
+      for (const [u, v] of cuts) {
+        if (v <= from || u >= s1) continue;
+        if (u > from) pieces.push([from, u]);
+        from = Math.max(from, v);
+      }
+      if (from < s1) pieces.push([from, s1]);
+      for (const [pa, pb] of pieces) {
+        const p = along((pa + pb) / 2),
+          L = pb - pa,
+          w = C.MEDIAN_HALF * 2 - 0.2;
+        parts.push(
+          colored(
+            e.axis === "x"
+              ? box(L, 0.3, w, p.x, 0.15, -p.y)
+              : box(w, 0.3, L, p.x, 0.15, -p.y),
+            0x9a9da6,
+          ),
+        );
+      }
     }
     seg(s0, s1, C.MEDIAN_HALF + 0.25, 0.15, 0xe6c13a);
     seg(s0, s1, -(C.MEDIAN_HALF + 0.25), 0.15, 0xe6c13a);

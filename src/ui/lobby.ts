@@ -1,6 +1,7 @@
-// Lobby: what the game is, the keys, what is on the way, the clips to film, START (and FREE ROAM once every
-// card is collected), and the author's links. Shown while loading, before every run from the lobby, and on ESC.
-import { CLIPS, viewsText } from "../game/score";
+// Lobby: what the game is, the keys, what is on the way, the clips to film, START (and FREE ROAM once every stunt
+// clip is filmed), and the author's links. Shown while loading, before every run from the lobby, and on ESC.
+import { CLIPS, FREE_ROAM_CLIPS, viewsText } from "../game/score";
+import { forInput } from "./keys";
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -22,6 +23,8 @@ export interface LobbyInfo {
   bestGrade: string | null;
   bestViews: number;
   known: ReadonlySet<string>;
+  /** your own shot of a filmed clip (a data URL), if one was taken */
+  thumb?: (id: string) => string | null;
 }
 
 /** key groups: each row is the keycaps (alternatives) and what they do; columns hold one or more groups */
@@ -47,7 +50,7 @@ const KEY_COLUMNS: [string, KeyRow[]][][] = [
         [["SPACE"], "Jump"],
         [["SPACE"], "Again in the air: flip"],
         [["HOLD SPACE"], "Fly (uses FUEL)"],
-        [["E"], "Tunnel ceiling / skyway"],
+        [["E"], "Tunnel ceiling"],
       ],
     ],
     [
@@ -60,12 +63,46 @@ const KEY_COLUMNS: [string, KeyRow[]][][] = [
   ],
 ];
 
-/** clip thumbnails (public/assets/clips/<id>.webp, round-5 CL images): set true once they are dropped in */
-const THUMBS = false;
+/** clip thumbnails: public/assets/clips/<id>.webp (round-5 CL images, tools/r5_share.py) */
+const THUMBS = true;
+
+/** the same, named after the on-screen buttons on a touch screen */
+const TOUCH_COLUMNS: [string, KeyRow[]][][] = [
+  [
+    [
+      "DRIVE",
+      [
+        [["GAS"], "Gas"],
+        [["BRAKE"], "Brake / reverse"],
+        [["<", ">"], "Steer"],
+        [["BOOST"], "Boost (uses SP)"],
+        [["DRIFT"], "Drift"],
+      ],
+    ],
+  ],
+  [
+    [
+      "AIR",
+      [
+        [["JUMP"], "Jump"],
+        [["JUMP"], "Again in the air: flip"],
+        [["HOLD JUMP"], "Fly (uses FUEL)"],
+        [["STICK"], "Tunnel ceiling"],
+      ],
+    ],
+    [
+      "MORE",
+      [
+        [["JUMP"], "Skip crash replay"],
+        [["LOBBY"], "Back to this lobby"],
+      ],
+    ],
+  ],
+];
 
 const WAY: [string, string, string][] = [
   ["toll", "TOLL QUEUE", "Every lane is stuck paying. Fly over the canopy."],
-  ["sinkhole", "SINKHOLES", "Drive in and you make the news. Hop them."],
+  ["sinkhole", "SINKHOLES", "Drive in and you wipe out. Hop them."],
   ["ramp", "THE RAMP", "At the event ground. Hit it fast, ride the wall."],
 ];
 
@@ -85,6 +122,8 @@ export class Lobby {
   constructor(
     parent: HTMLElement,
     private on: { start(): void; free(): void },
+    /** a touch screen: name the on-screen buttons, not keys */
+    private touch = false,
   ) {
     const base = import.meta.env.BASE_URL;
     this.root = el("div", "lobby", parent);
@@ -112,7 +151,7 @@ export class Lobby {
     );
     this.today = el("div", "lb-stats", left);
     const keys = el("div", "lb-keys", left);
-    for (const column of KEY_COLUMNS) {
+    for (const column of touch ? TOUCH_COLUMNS : KEY_COLUMNS) {
       const col = el("div", "lb-kcol", keys);
       for (const [group, rows] of column) {
         el("div", "lb-h", col, group);
@@ -127,7 +166,7 @@ export class Lobby {
         }
       }
     }
-    el("div", "lb-note", left, "Arrow keys work too.");
+    if (!touch) el("div", "lb-note", left, "Arrow keys work too.");
     const actions = el("div", "lb-actions", left);
     this.startBtn = el("button", "lb-start", actions, "LOADING");
     this.startBtn.disabled = true;
@@ -168,7 +207,7 @@ export class Lobby {
       "span",
       "lb-note",
       ch,
-      "Film all " + CLIPS.length + " to unlock FREE ROAM",
+      FREE_ROAM_CLIPS.length + " stunt clips unlock FREE ROAM",
     );
     this.cards = el("div", "lb-cards", right);
     el(
@@ -216,10 +255,13 @@ export class Lobby {
       el("b", "", s, big);
       el("small", "", s, small);
     };
+    // (no persona yet: still loading, the same two lines as a placeholder)
     stat(
       "TODAY'S COMMUTE",
-      info.persona,
-      (info.distance / 1000).toFixed(1) + " km to the office",
+      info.persona || "...",
+      info.persona
+        ? (info.distance / 1000).toFixed(1) + " km to the office"
+        : "finding today's route",
     );
     stat(
       "BEST",
@@ -235,7 +277,10 @@ export class Lobby {
       const d = el("div", "lb-card" + (got ? " got" : ""), this.cards);
       if (THUMBS) {
         const im = el("img", "lb-cthumb" + (got ? "" : " dim"), d);
-        im.src = base + "assets/clips/" + c.id + ".webp";
+        // your own shot of it once filmed (taken the moment it happened), else the stock picture
+        im.src =
+          (got && info.thumb?.(c.id)) ||
+          base + "assets/clips/" + c.id + ".webp";
         im.alt = "";
         im.onerror = () => im.remove();
       }
@@ -245,13 +290,14 @@ export class Lobby {
       if (c.color) dot.style.background = c.color;
       if (got) el("b", "", hd, c.title);
       else el("em", "", hd, "TO FILM");
-      el("span", "", d, got ? c.caption : c.how);
+      el("span", "", d, got ? c.caption : forInput(c.how, this.touch));
     }
-    this.canFree = n >= CLIPS.length;
+    const nFree = FREE_ROAM_CLIPS.filter((c) => info.known.has(c.id)).length;
+    this.canFree = nFree >= FREE_ROAM_CLIPS.length;
     this.freeBtn.disabled = !this.canFree;
     this.freeBtn.textContent = this.canFree
       ? "FREE ROAM"
-      : "FREE ROAM  " + n + " / " + CLIPS.length;
+      : "FREE ROAM  " + nFree + " / " + FREE_ROAM_CLIPS.length;
     if (this.ready) this.startBtn.focus({ preventScroll: true });
   }
 
