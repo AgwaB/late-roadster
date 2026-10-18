@@ -118,11 +118,18 @@ describe("hud", () => {
       lobby = vi.fn();
     hud.showResult(r, next, lobby);
     expect(input.gameplayEnabled).toBe(false);
-    expect(root.querySelector(".rviews")!.textContent).toContain("240K VIEWS");
-    expect(root.querySelector(".rviews")!.textContent).toContain("x2 ON TIME");
-    expect(root.querySelector(".rcards")!.textContent).toBe(
-      "NEW CLIPS: TOLL $0, THE RAMP",
+    expect(root.querySelector(".rviews b")!.textContent).toBe("240K");
+    expect(root.querySelector(".rviews small")!.textContent).toBe(
+      "120K x2 on time",
     );
+    expect(root.querySelector(".rtime b")!.textContent).toBe("+0:12");
+    expect(
+      Array.from(root.querySelectorAll(".rcards i")).map((e) => e.textContent),
+    ).toEqual(["TOLL $0", "THE RAMP"]);
+    // one primary button; the clip saves say what they film
+    expect(
+      root.querySelectorAll(".result button.next:not(.alt):not(.save)"),
+    ).toHaveLength(1);
     hud.handleResultKey(key("Enter"));
     expect(next).toHaveBeenCalledTimes(1);
     expect(lobby).not.toHaveBeenCalled();
@@ -134,7 +141,10 @@ describe("hud", () => {
       next,
       lobby,
     );
-    expect(root.querySelector(".rviews")!.textContent).toContain("x0.5 LATE");
+    expect(root.querySelector(".rviews small")!.textContent).toContain(
+      "x0.5 late",
+    );
+    expect(root.querySelector(".rtime b")!.textContent).toBe("9:00:00");
     root.querySelector<HTMLButtonElement>(".next.alt")!.click();
     expect(lobby).toHaveBeenCalledTimes(1);
     // ESC / Q on the result card go through its LOBBY button: the card closes, and main.ts sees the key consumed
@@ -148,7 +158,33 @@ describe("hud", () => {
     expect(root.querySelector(".result")!.classList.contains("hidden")).toBe(
       true,
     );
-    expect(root.querySelector(".rcrash")!.textContent).toBe("WIPEOUT ×1");
+    expect(root.querySelector(".rcrash b")!.textContent).toBe("1");
+    expect(root.querySelector(".rcrash span")!.textContent).toBe("WIPEOUTS");
+    root.remove();
+  });
+
+  it("labels the clip saves by what they film, and keeps the label through saving", async () => {
+    const { root, hud } = make();
+    let finish: (ok: boolean) => void = () => {};
+    hud.setSaveBest((setLabel) => {
+      setLabel("SAVING…");
+      return new Promise<boolean>((res) => (finish = res));
+    }, "RAMP EXTRA FLIP");
+    hud.setSaveClip(null, "ARRIVAL", "CLOCKED IN 8:59:21");
+    const best = root.querySelector<HTMLButtonElement>(".next.save.best")!;
+    expect(best.querySelector("b")!.textContent).toBe("BEST STUNT");
+    expect(best.querySelector("small")!.textContent).toBe("RAMP EXTRA FLIP");
+    expect(root.querySelector(".next.save:not(.best)")!.classList).toContain(
+      "hidden",
+    );
+    best.click();
+    expect(best.querySelector("b")!.textContent).toBe("SAVING…");
+    expect(best.disabled).toBe(true);
+    finish(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(best.querySelector("b")!.textContent).toBe("SAVED");
+    expect(best.querySelector("small")!.textContent).toBe("RAMP EXTRA FLIP");
     root.remove();
   });
 

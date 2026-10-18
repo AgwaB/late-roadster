@@ -118,6 +118,34 @@ describe("#4 actual ceiling-car vertical overlap", () => {
   });
 });
 
+describe("roof hopping across standing cars (game-qa toll-queue soft-lock)", () => {
+  it("hops on over a taller car ahead instead of bouncing in place on the low roof, even with no fuel", () => {
+    const s = emptySession();
+    const x = s.car.x,
+      y = s.car.y;
+    // a low car, then 1 m behind it a van, then another low car: the toll queue
+    s.props = [
+      { ...prop("jamcar", x, y, 1.25), id: 1 },
+      { ...prop("jamcar", x + 5.8, y, 2.15), id: 2 },
+      { ...prop("jamcar", x + 11.6, y, 1.25), id: 3 },
+    ];
+    // coming down on the low roof, knocked backwards by the van's tail
+    Object.assign(s.car, {
+      h: 1.25 + 0.3,
+      previousBottom: 1.25 + 0.35,
+      vH: -1,
+      v: -2.4,
+      grounded: false,
+      fuel: 0,
+    });
+    for (let i = 0; i < 4 / DT && !(s.car.grounded && s.car.x > x + 14); i++)
+      s.step(DT, { ...NO_INPUT, accel: true });
+    expect(s.car.state).toBe("drive");
+    expect(s.car.x).toBeGreaterThan(x + 14);
+    expect(s.car.grounded).toBe(true);
+  });
+});
+
 describe("#5 / #14 genuine stomps and capped SP", () => {
   it.each(["npc", "jamcar", "parked"] as const)(
     "%s: h=6 over roof=3.55 is not a remote stomp",
@@ -165,11 +193,19 @@ describe("#5 / #14 genuine stomps and capped SP", () => {
     s.car.vH = 2;
     expect(s["collideStatic"](true)).not.toContain("stomp");
     falling(s, 3.1, 3.0);
-    expect(s["stomp"](p, p.h)).toBe(false);
+    expect(s["stomp"](p, p.h)).toBeNull();
     falling(s, 3.6, 3.55);
     s.car.sp = 95;
-    expect(s["stomp"](p, p.h)).toBe(true);
+    expect(s["stomp"](p, p.h)).toBe("stomp");
     expect(s.car.sp).toBe(C.SP_MAX);
+    // the same roof again: still a bounce (with a push forward), but no second stomp reward
+    falling(s, 3.6, 3.55);
+    s.car.v = 0;
+    s.car.sp = 50;
+    expect(s["stomp"](p, p.h)).toBe("bounce");
+    expect(s.car.sp).toBe(50);
+    expect(s.car.v).toBe(C.ROOF_HOP_V);
+    expect(s.car.vH).toBeGreaterThan(0);
   });
 
   it("tracks a moving NPC's previous roof, not just its current height", () => {

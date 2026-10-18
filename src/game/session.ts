@@ -110,6 +110,7 @@ import {
   type Edge,
   type Prop,
   edgePose,
+  expand,
   groundAt,
   straightOn,
   inBox,
@@ -382,7 +383,14 @@ export class Session {
         if (k && !k.ramp && h < sw.h - 1.5 && Math.abs(y - sw.y) <= k.half)
           return sw.h - 1.4 - C.CAR_H;
         const under = PLAZA.bottom - C.CAR_ROOF - 0.05;
-        if (canopy && h <= under + 0.3 && inBox(canopy, x, y)) return under;
+        // (only once the car is well under it: one nosed in at the edge can still rise, the canopy's edge
+        // pushing it out, instead of being pinned under its rim)
+        if (
+          canopy &&
+          h <= under + 0.3 &&
+          inBox(expand(canopy, -C.CAR_HALF_L), x, y)
+        )
+          return under;
         return Infinity;
       },
       wallRamp: city.stage?.ramp ?? null,
@@ -565,31 +573,47 @@ export class Session {
   }
 
   /** Genuine descending bottom/roof crossing only; both stationary and moving cars use this reward. */
+  /** Coming down on a car's roof (see roofBounce). */
   private stomp(
     target: { stomped: boolean },
     roof: number,
     previousRoof = roof,
-  ): boolean {
+  ): "stomp" | "bounce" | null {
     const car = this.car;
     const bottom = carSpan(car).bottom;
     const before = car.previousBottom - previousRoof;
     const now = bottom - roof;
     if (
-      target.stomped ||
       car.ceiling ||
       car.vH >= 0 ||
       before < -ROOF_TOLERANCE ||
       now > ROOF_TOLERANCE ||
       now > before
     )
-      return false;
-    target.stomped = true;
-    car.h += roof - bottom;
+      return null;
+    return this.roofBounce(target, roof);
+  }
+
+  /**
+   * Onto a roof and off it again: every roof bounces the car on, forward, so a car stopped in a jam hops on across
+   * the roofs instead of bouncing in place against a van's tail or drifting backwards (a soft lock with no fuel and no
+   * ground to hop from, found by game-qa at the toll queue and on the skyway deck); only the first landing on each car
+   * is a STOMP (SP, VIEWS).
+   */
+  private roofBounce(
+    target: { stomped: boolean },
+    roof: number,
+  ): "stomp" | "bounce" {
+    const car = this.car;
+    car.h += roof - carSpan(car).bottom;
     car.vH = 5;
     car.grounded = false;
-    car.sp = Math.min(C.SP_MAX, car.sp + C.SP_STOMP);
+    car.v = Math.max(car.v, C.ROOF_HOP_V);
     this.bumpCd = 0.4;
-    return true;
+    if (target.stomped) return "bounce";
+    target.stomped = true;
+    car.sp = Math.min(C.SP_MAX, car.sp + C.SP_STOMP);
+    return "stomp";
   }
 
   step(dt: number, input: Input): string[] {
@@ -1294,8 +1318,21 @@ export class Session {
       }
       const standingCar =
         o.kind === "jamcar" || o.kind === "parked" || o.kind === "stagecar";
-      if (standingCar && this.stomp(o, z0 + o.h)) {
-        ev.push("stomp");
+      let roof = standingCar ? this.stomp(o, z0 + o.h) : null;
+      // airborne just below its roof (bouncing up off the car before it in a queue, say): up onto it, rather than
+      // bumping its tail and bouncing back
+      const bottom = carSpan(car).bottom;
+      if (
+        !roof &&
+        standingCar &&
+        !car.grounded &&
+        !car.ceiling &&
+        bottom < z0 + o.h &&
+        bottom > z0 + o.h - C.ROOF_STEP_UP
+      )
+        roof = this.roofBounce(o, z0 + o.h);
+      if (roof) {
+        if (roof === "stomp") ev.push("stomp");
         continue;
       }
       if (carSpan(car).bottom >= z0 + o.h) continue;
@@ -1436,9 +1473,16 @@ export class Session {
         hw: n.halfW,
       });
       if (!hit) continue;
-      if (this.stomp(n, span.top, this.previousRoofs.get(n) ?? span.top)) {
-        n.v *= 0.7;
-        ev.push("stomp");
+      const roof = this.stomp(
+        n,
+        span.top,
+        this.previousRoofs.get(n) ?? span.top,
+      );
+      if (roof) {
+        if (roof === "stomp") {
+          n.v *= 0.7;
+          ev.push("stomp");
+        }
         continue;
       }
       const player = carSpan(car);

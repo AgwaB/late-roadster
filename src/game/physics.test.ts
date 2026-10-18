@@ -252,6 +252,24 @@ describe("car physics (Raycity layout)", () => {
     expect(ev3.filter((e) => e === "flipStart").length).toBeGreaterThan(0);
   });
 
+  it("flying from a standstill with the gas held, the jets push it forward (it can clear a jam it was stuck behind)", () => {
+    const c = newCar(0, 0, 0);
+    const x0 = c.x;
+    let peak = 0;
+    run(c, flat, 2.4, (t) => {
+      peak = Math.max(peak, c.v);
+      return { ...GAS, jump: t < 2.4 };
+    });
+    expect(c.grounded).toBe(false);
+    expect(peak).toBeGreaterThan(C.FLY_SPEED - 1);
+    expect(peak).toBeLessThanOrEqual(C.FLY_SPEED + 1e-9);
+    expect(c.x - x0).toBeGreaterThan(20);
+    // without the gas it rises in place, as before
+    const d = newCar(0, 0, 0);
+    run(d, flat, 1.5, (t) => ({ jump: t < 1.5 }));
+    expect(Math.abs(d.x)).toBeLessThan(0.5);
+  });
+
   it("respawns after the crash replay", () => {
     const c = newCar(0, 0, 0);
     run(c, flat, 3, () => GAS);

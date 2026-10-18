@@ -357,8 +357,33 @@ body {
   color: #fff;
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
 }
+/* the result: one panel in the lobby's style (.lb-stat tiles, .lb-h labels, its button looks), the photo beside it */
+.rwrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  max-width: 95vw;
+}
+.rpanel {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 92vw);
+  max-height: 94vh;
+  overflow: auto;
+  padding: 26px 30px 26px;
+  text-align: center;
+  background: rgba(9, 12, 24, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+  color: #e6ebf5;
+}
+.rpanel .lb-h {
+  margin: 0 0 8px;
+}
 .grade {
-  font-size: clamp(90px, 24vw, 180px);
+  font-size: clamp(72px, 15vw, 128px);
   font-weight: 900;
   line-height: 1;
 }
@@ -376,48 +401,130 @@ body {
 }
 .grade.gLATE {
   color: #ff3b3b;
-  font-size: clamp(60px, 16vw, 120px);
-}
-.rtime {
-  font:
-    700 36px ui-monospace,
-    Menlo,
-    monospace;
-}
-.rcrash {
-  font-size: 28px;
+  font-size: clamp(56px, 11vw, 96px);
 }
 .rpersona {
-  font: 700 20px system-ui;
-  color: #cfd6e6;
-  letter-spacing: 0.04em;
-}
-.next.save {
-  background: #2b2f3a;
-  color: #fff;
   margin-top: 6px;
+  font: 800 12px system-ui;
+  letter-spacing: 0.2em;
+  color: #aab3c5;
 }
-.next.save.hidden {
+.rstats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-top: 20px;
+}
+.rstats .lb-stat {
+  align-items: center;
+  min-width: 0;
+}
+.rstats .lb-stat b {
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+}
+.rstats .rviews b {
+  color: #ffd23f;
+}
+.rcards {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 18px;
+}
+.rcards:empty {
   display: none;
 }
-/* the run's best stunt: the one worth sharing */
-.next.save.best {
-  background: #ffd23f;
-  color: #15161a;
+.rcards .lb-h {
+  flex-basis: 100%;
+  margin: 0 0 2px;
 }
-.next:disabled {
-  opacity: 0.6;
-  cursor: default;
+.rcards i {
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 210, 63, 0.35);
+  background: rgba(255, 210, 63, 0.12);
+  font: 800 12px system-ui;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  color: #ffd23f;
 }
+.rsave {
+  margin-top: 20px;
+}
+/* no recording in this browser: no SAVE A CLIP section at all */
+.rsave:not(:has(.next:not(.hidden))) {
+  display: none;
+}
+.rbtns {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 10px;
+}
+.rpanel > .rbtns {
+  margin-top: 22px;
+}
+/* NEXT COMMUTE: the one primary button (the lobby's START) */
 .next {
-  margin-top: 18px;
-  font: 800 22px system-ui;
-  padding: 14px 28px;
+  min-width: 0;
+  font: 900 20px system-ui;
+  letter-spacing: 0.06em;
+  padding: 14px 18px;
   border: 0;
   border-radius: 12px;
   background: #ffd23f;
   color: #111;
   cursor: pointer;
+  box-shadow: 0 6px 20px rgba(255, 210, 63, 0.25);
+}
+.next:hover {
+  background: #ffdc5e;
+}
+/* LOBBY and the clip saves: the lobby's outlined secondary button */
+.next.alt,
+.next.save {
+  font-size: 16px;
+  font-weight: 800;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  box-shadow: none;
+}
+.next.alt:hover,
+.next.save:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.next.save {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 10px 12px;
+}
+.next.save b {
+  font: 800 15px system-ui;
+  letter-spacing: 0.06em;
+}
+.next.save small {
+  font: 700 11px system-ui;
+  letter-spacing: 0.06em;
+  color: #aab3c5;
+}
+/* the run's best stunt: the clip worth sharing */
+.next.save.best {
+  border-color: rgba(255, 210, 63, 0.6);
+}
+.next.save.best b {
+  color: #ffd23f;
+}
+.next.save.hidden {
+  display: none;
+}
+.next:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .touch {
@@ -504,7 +611,17 @@ button:focus-visible {
   outline-offset: 4px;
 }
 #hud:has(.result:not(.hidden))
-  > :is(.news, .facecam, .band, .lines, .views, .toast, .penalty, .crashinfo) {
+  > :is(
+    .news,
+    .band,
+    .lines,
+    .views,
+    .toast,
+    .penalty,
+    .crashinfo,
+    .touch,
+    .lobby-btn
+  ) {
   visibility: hidden;
 }
 .credits.hidden {
@@ -519,40 +636,12 @@ button:focus-visible {
   opacity: 0.85;
 }
 
-/* dashcam face close-up */
-.facecam {
-  top: 90px;
-  left: 50%;
-  width: 200px;
-  height: 150px;
-  margin-left: 110px;
-  border: 4px solid #fff;
-  border-radius: 6px;
-  opacity: 0;
-  transform: rotate(4deg) scale(0.7);
-  transition:
-    opacity 0.08s,
-    transform 0.12s;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
-  pointer-events: none;
-}
-.facecam.show {
-  opacity: 1;
-  transform: rotate(-3deg) scale(1);
-}
 @media (pointer: coarse) {
   /* the minimap sits under the compass on touch: the news card goes just left of it */
   .news {
     top: 96px;
     right: 168px;
     width: 200px;
-  }
-  .facecam {
-    top: 70px;
-    left: 12px;
-    margin-left: 0;
-    width: 130px;
-    height: 98px;
   }
 }
 
@@ -1073,46 +1162,15 @@ button:focus-visible {
 .ctip.show {
   display: block;
 }
-.rviews {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-.rviews b {
-  font:
-    900 34px ui-monospace,
-    Menlo,
-    monospace;
-  color: #ffd23f;
-}
-.rviews span {
-  font: 700 14px system-ui;
-  color: #cfd6e6;
-  letter-spacing: 0.06em;
-}
-.rcards {
-  max-width: 80vw;
-  text-align: center;
-  font: 700 15px system-ui;
-  color: #ffd23f;
-  letter-spacing: 0.04em;
-}
-.rbtns {
-  display: flex;
-  gap: 12px;
-}
-/* PHOTO FINISH: the arrival as a punched time-card photo, pinned at the side of the result */
+/* PHOTO FINISH: the arrival as a punched time-card photo, pinned beside the result panel */
 .rphoto {
-  position: absolute;
-  right: 5vw;
-  top: 50%;
-  width: min(28vw, 340px);
+  flex: none;
+  width: min(26vw, 320px);
   padding: 10px 10px 0;
   background: #f4f1ea;
   border-radius: 4px;
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
-  transform: translateY(-50%) rotate(4deg);
+  transform: rotate(4deg);
   opacity: 0;
   transition:
     opacity 0.25s,
@@ -1120,7 +1178,7 @@ button:focus-visible {
 }
 .rphoto.show {
   opacity: 1;
-  transform: translateY(-50%) rotate(-3deg);
+  transform: rotate(-3deg);
 }
 .rphoto img {
   display: block;
@@ -1147,10 +1205,66 @@ button:focus-visible {
   .rphoto {
     display: none;
   }
+  .rpanel {
+    padding: 22px 18px;
+  }
+  .rstats .lb-stat {
+    padding: 10px 6px;
+  }
+  .rstats .lb-stat b {
+    font-size: 22px;
+  }
+  .next {
+    font-size: 15px;
+    letter-spacing: 0.03em;
+    padding: 14px 8px;
+  }
 }
-.next.alt {
-  background: #2b2f3a;
-  color: #fff;
+/* a phone on its side: no room for the title or a huge grade */
+@media (max-height: 560px) {
+  .rtitle {
+    display: none;
+  }
+  .grade,
+  .grade.gLATE {
+    font-size: 56px;
+  }
+  .rphoto {
+    display: none;
+  }
+  /* two columns: the run on the left, the clip saves and the buttons on the right */
+  .rpanel {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    grid-template-rows: repeat(4, auto);
+    column-gap: 22px;
+    align-items: center;
+    width: min(820px, 96vw);
+    padding: 16px 22px;
+  }
+  .rpanel > :not(.rsave, .rbtns) {
+    grid-column: 1;
+  }
+  .rstats {
+    margin-top: 12px;
+  }
+  .rcards {
+    margin-top: 12px;
+  }
+  .rsave {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    margin-top: 0;
+  }
+  .rpanel > .rbtns {
+    grid-column: 2;
+    grid-row: 4;
+    margin-top: 12px;
+  }
+  .next {
+    font-size: 16px;
+    padding: 12px 8px;
+  }
 }
 
 .lb-chd {

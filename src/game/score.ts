@@ -345,6 +345,7 @@ export class Tracker {
       const over =
         air &&
         span.bottom > 0.3 &&
+        span.bottom < 6 && // a hop or a low jet pass, not driving the skyway deck 11 m above it (found by game-qa)
         Math.abs(p.x - car.x) < p.r &&
         Math.hypot(p.x - car.x, p.y - car.y) < p.r;
       if (this.once("sink" + i, over)) {

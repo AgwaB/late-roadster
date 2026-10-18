@@ -680,20 +680,24 @@ export function buildCity(seed = 1): City {
     }
     void b;
   }
-  // the skyway deck is jammed in the middle ("over the jam"): standing cars in all four lanes, with gaps to weave
-  // through, or a roof-to-roof stomp across them (the session treats them like the tunnel jam, z0 up on the deck)
+  // the skyway deck is jammed in the middle ("over the jam"): rows of standing cars 12 m apart across all four lanes,
+  // each with one lane free, the free lane moving at most one lane from row to row, so there is always a slalom to
+  // weave (or roofs to hop across: every roof bounces the car on). The session treats them like the tunnel jam (z0 up
+  // on the deck)
   {
     const sw = skyway;
     const lanes = [-5.5, -2.05, 2.05, 5.5];
-    let k = 0;
+    const FREE = [1, 1, 0, 1, 2, 3, 3, 2, 1, 1];
+    let k = 0,
+      row = 0;
     for (
       let x = sw.x0 + sw.ramp + sw.taper + 50;
       x < sw.x1 - sw.ramp - sw.taper - 40;
-      x += 8.5
+      x += 12, row++
     )
       lanes.forEach((ly, li) => {
         k++;
-        if ((k * 7 + li * 3) % 10 < 3) return; // a gap
+        if (li === FREE[row % FREE.length]) return; // this row's way through
         const variant = (k * 5 + li) % PARKED_KINDS.length;
         const d = VEHICLE_DIMS[PARKED_KINDS[variant]];
         const cx = x + (((k * 13) % 5) - 2) * 0.4;

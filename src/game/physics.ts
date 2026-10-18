@@ -420,6 +420,9 @@ export function stepCar(c: Car, inp: Input, dt: number, env: Env): string[] {
     } else {
       c.v += C.clamp(0 - c.v, -C.COAST_DECEL * dt, C.COAST_DECEL * dt);
     }
+  } else if (c.thrusting && inp.accel && c.fuel > 0 && c.v < C.FLY_SPEED) {
+    // flying on the jets with the gas held: they push forward too (never slowing a faster car)
+    c.v = Math.min(C.FLY_SPEED, c.v + C.FLY_ACCEL * dt);
   }
 
   // ---- yaw

@@ -24,7 +24,7 @@ import {
 } from "./render/fx";
 import { createScene } from "./render/scene";
 import { NpcRenderer, buildPlayerCar } from "./render/vehicles";
-import { Hud } from "./ui/hud";
+import { Hud, crashCause } from "./ui/hud";
 import { Lobby } from "./ui/lobby";
 import { CLIPS } from "./game/score";
 import { rampWorld } from "./game/venue";
@@ -202,7 +202,6 @@ window.addEventListener("keydown", (e) => {
 const hazardsView = new HazardRenderer(kit.scene, (n) => assets.tex.get(n));
 let devCam: { pos: number[]; look: number[] } | null = null;
 // per-run presentation (declared before the first newSession(), which clears it)
-let faceShown = false;
 /** real seconds of slow motion left (set over the ramp's lip) */
 let slowT = 0;
 /** the rocket's liftoff shot is on (the world runs slowed around it) */
@@ -236,7 +235,6 @@ let session = newSession(false);
  * the next commute's first jump from the venue and cheer its landing; a liftoff shot or slow motion would run on).
  */
 function resetRunPresentation(): void {
-  faceShown = false;
   slowT = 0;
   rocketShot = false;
   ticketed = ticket.visible = false;
@@ -441,7 +439,6 @@ function newsFlash(i: number): void {
 }
 const cinePos = new THREE.Vector3(),
   cineLook = new THREE.Vector3();
-const TALL = new Set(["camper", "truck", "bus", "van"]);
 const spinAxisV = new THREE.Vector3(),
   spinQ = new THREE.Quaternion();
 function handleEvents(ev: string[]): void {
@@ -519,7 +516,7 @@ function handleEvents(ev: string[]): void {
         const big = v !== "rough";
         const fl = ev.find((e) => e.startsWith("flip:"));
         const extra = big && !!fl && Number(fl.split(":")[1]) >= 2;
-        stunt(extra ? "ONE MORE FLIP" : "THE RAMP", extra ? 4 : 3);
+        stunt(extra ? "RAMP EXTRA FLIP" : "THE RAMP", extra ? 4 : 3);
         if (memes.celebrate(c.x, c.y, wall, big, fx, extra))
           sfx.event("liftoff");
         sfx.event("applause", big ? "big" : "small");
@@ -761,6 +758,17 @@ function frame(now: number): void {
                 setLabel,
               )
           : null,
+        // what that clip shows: the last wipeout, else the arrival (or the bell at 9:00)
+        lastCrashMediaTime === null
+          ? res.finished
+            ? "ARRIVAL"
+            : "FINAL SECONDS"
+          : "LAST WIPEOUT",
+        lastCrashMediaTime === null
+          ? res.finished
+            ? "CLOCKED IN " + session.clock
+            : "BEFORE 9:00"
+          : crashCause(session.lastCrash),
       );
       // the best stunt of the run, as its own clip
       const best = bestStunt;
@@ -1029,21 +1037,6 @@ function frame(now: number): void {
   )
     newsFlash(Math.floor(Math.random() * NEWS.length));
   sfx.heartbeat(session.timeLeft, car.state === "drive");
-  // dashcam face close-up when clearing a tall vehicle (camper / truck / bus / van), once per air phase
-  if (car.grounded || car.state !== "drive") faceShown = false;
-  else if (!faceShown) {
-    for (const n of session.traffic.npcs) {
-      if (n.dead || !TALL.has(n.kind)) continue;
-      if (
-        Math.hypot(n.x - car.x, n.y - car.y) < n.halfL + 1.5 &&
-        car.h > n.h - 0.3
-      ) {
-        hud.faceCam(car.flipRemaining > 0 ? "shock" : "cool");
-        faceShown = true;
-        break;
-      }
-    }
-  }
   kit.render();
   // pictures of the frame just drawn (the canvas can be read until the browser presents it)
   if (pendingPhoto) {
@@ -1126,4 +1119,6 @@ if (import.meta.env.DEV) {
       if (lobby.isOpen) lobby.show(lobbyInfo());
     },
   };
+  // game-qa's hook (window.__qa) so a decision model can play: scripts/qa.sh, qa/
+  void import("./qa").then((m) => m.installQa());
 }

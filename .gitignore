@@ -4,3 +4,6 @@ dist
 .pi/
 __pycache__/
 *.pyc
+# game-qa (tkymx/game-qa, MIT) is cloned here by scripts/qa.sh setup; its runs write to .game-qa/
+tools/game-qa/
+.game-qa/

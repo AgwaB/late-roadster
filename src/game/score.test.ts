@@ -19,6 +19,20 @@ describe("clips and VIEWS", () => {
     }
   });
 
+  it("films SINKHOLE HOP for a hop over a sinkhole, not for driving the skyway deck high above one", () => {
+    const p = city.potholes[0];
+    const deck = new Tracker(city, new Set());
+    const high = newCar(p.x, p.y, 0);
+    high.grounded = false;
+    high.h = C.SKY_H + 0.6; // a roof bounce on the deck
+    expect(deck.step(1 / 60, high, [])).not.toContain("clip:sinkhole");
+    const road = new Tracker(city, new Set());
+    const hop = newCar(p.x, p.y, 0);
+    hop.grounded = false;
+    hop.h = 1;
+    expect(road.step(1 / 60, hop, [])).toContain("clip:sinkhole");
+  });
+
   it("pays a flip, unlocks FLIP RESET for two, and chains the multiplier", () => {
     const tr = new Tracker(city, new Set());
     const c = newCar(0, 0, 0);

@@ -74,8 +74,14 @@ export const TAP_MAX = 0.18; // s: an in-air press released sooner is a flip tap
 export const LAUNCH_HOLD = 0.12; // s the launch press must stay down before the jets take over (a tap = the hop)
 // flight fuel (the FUEL gauge, 0..1): a full tank is FUEL_FLY_S s of jet flight; it refills while on the ground
 export const FUEL_FLY_S = 2.5;
-export const FUEL_REFILL = 1 / 12; // per second on the ground (12 s from empty to full)
+export const FUEL_REFILL = 1.5 / 12; // per second on the ground (8 s from empty to full)
 export const FLY_SINK = 2.5; // m/s descent once the tank is empty (still holding)
+// with the gas held, the flight jets also push forward (gently, up to FLY_SPEED): a car stopped behind a jam can still
+// fly over it instead of only bobbing up and down in place (found by a game-qa / Jev run at the toll queue)
+export const FLY_SPEED = 22; // m/s
+export const ROOF_HOP_V = 8; // m/s: at least this fast forward off any roof the car comes down on
+export const ROOF_STEP_UP = 0.5; // m: airborne this close under a standing car's roof, the car hops up onto it
+export const FLY_ACCEL = 10; // m/s²
 // Down off the event ramp's lip, as in the reveal: the cold-gas jets right the car and brake the fall, so it settles
 // onto its wheels instead of dropping 23 m. The allowed sink rate shrinks with height (DROP_TOUCH_V + DROP_K x height),
 // so it falls freely at first, then hangs on its jets and touches down at DROP_TOUCH_V.

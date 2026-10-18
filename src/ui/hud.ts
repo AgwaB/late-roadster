@@ -43,21 +43,27 @@ const TIPS: Record<string, string> = {
 /** metres from a clip's beam within which its hint shows */
 const BEAM_HINT_R = 34;
 
-function crashCause(reason: string): string {
+export function crashCause(reason: string): string {
   return CAUSES[reason] ?? "";
 }
 function crashTip(reason: string): string {
   return TIPS[reason] ?? "";
 }
 
-/** A save button: label, disabled while saving, SAVED / CLIP UNAVAILABLE after; a null handler hides it. */
+/**
+ * A save button: what the clip is (title) and which moment (sub); the title turns SAVING… / SAVED / CLIP UNAVAILABLE,
+ * the button is disabled while saving; a null handler hides it.
+ */
 function wireSave(
   btn: HTMLButtonElement,
   handler: ((setLabel: (s: string) => void) => Promise<boolean>) | null,
-  label: string,
+  title: string,
+  sub: string,
 ): void {
   btn.classList.toggle("hidden", !handler);
-  btn.textContent = label;
+  btn.replaceChildren();
+  const head = el("b", "", btn, title);
+  el("small", "", btn, sub);
   btn.disabled = false;
   btn.onclick = handler
     ? async () => {
@@ -65,12 +71,12 @@ function wireSave(
         btn.disabled = true;
         try {
           const saved = await handler((s) => {
-            if (btn.onclick === current) setText(btn, s);
+            if (btn.onclick === current) setText(head, s);
           });
           if (btn.onclick === current)
-            setText(btn, saved ? "SAVED" : "CLIP UNAVAILABLE");
+            setText(head, saved ? "SAVED" : "CLIP UNAVAILABLE");
         } catch {
-          if (btn.onclick === current) setText(btn, "CLIP UNAVAILABLE");
+          if (btn.onclick === current) setText(head, "CLIP UNAVAILABLE");
         } finally {
           if (btn.onclick === current) btn.disabled = false;
         }
@@ -123,8 +129,6 @@ export class Hud {
   private mini: HTMLCanvasElement;
   private miniBase: HTMLCanvasElement | null = null;
   private miniScale = 1;
-  private faceEl: HTMLCanvasElement;
-  private faceT = 0;
   /** at a clip's beam: what to do there */
   private hintEl: HTMLElement;
   private hintId = "";
@@ -171,9 +175,6 @@ export class Hud {
     this.crashInfo = el("div", "crashinfo", root);
     this.crashCount = el("div", "ccount", this.crashInfo);
     this.crashTipEl = el("div", "ctip", this.crashInfo);
-    this.faceEl = el("canvas", "facecam", root);
-    this.faceEl.width = 240;
-    this.faceEl.height = 180;
     this.hintEl = el("div", "beamhint", root);
     // BREAKING NEWS: a small picture card top right, now and then, about the city's other roadsters
     this.newsEl = el("div", "news", root);
@@ -254,22 +255,28 @@ export class Hud {
       `url("${import.meta.env.BASE_URL}assets/photo/KA_01.webp")`,
     );
     el("div", "rtitle", this.result, "LATE ROADSTER");
-    this.resultGrade = el("div", "grade", this.result, "S");
-    this.resultTime = el("div", "rtime", this.result, "+0:00");
-    this.resultCrash = el("div", "rcrash", this.result, "WIPEOUT ×0");
-    this.resultPersona = el("div", "rpersona", this.result, "");
-    this.resultViews = el("div", "rviews", this.result, "");
-    this.resultCards = el("div", "rcards", this.result, "");
-    this.photoEl = el("div", "rphoto", this.result);
+    // one panel in the lobby's style (its stat tiles, section labels and buttons), the arrival photo pinned beside it
+    const wrap = el("div", "rwrap", this.result);
+    const panel = el("div", "rpanel", wrap);
+    this.resultGrade = el("div", "grade", panel, "S");
+    this.resultPersona = el("div", "rpersona", panel, "");
+    const stats = el("div", "rstats", panel);
+    this.resultTime = el("div", "lb-stat rtime", stats);
+    this.resultCrash = el("div", "lb-stat rcrash", stats);
+    this.resultViews = el("div", "lb-stat rviews", stats);
+    this.resultCards = el("div", "rcards", panel);
+    const saveSec = el("div", "rsave", panel);
+    el("span", "lb-h", saveSec, "SAVE A CLIP");
+    const saves = el("div", "rbtns", saveSec);
+    this.bestBtn = el("button", "next save best hidden", saves);
+    this.saveBtn = el("button", "next save hidden", saves);
+    const row = el("div", "rbtns", panel);
+    this.lobbyBtn = el("button", "next alt", row, "LOBBY");
+    this.nextBtn = el("button", "next", row, "NEXT COMMUTE");
+    this.photoEl = el("div", "rphoto", wrap);
     this.photoImg = el("img", "", this.photoEl);
     this.photoImg.alt = "";
     this.photoCap = el("b", "", this.photoEl);
-    const saves = el("div", "rbtns", this.result);
-    this.saveBtn = el("button", "next save hidden", saves, "SAVE CLIP");
-    this.bestBtn = el("button", "next save best hidden", saves, "SAVE BEST");
-    const row = el("div", "rbtns", this.result);
-    this.lobbyBtn = el("button", "next alt", row, "LOBBY");
-    this.nextBtn = el("button", "next", row, "NEXT COMMUTE");
     // the keys are explained in the lobby (src/ui/lobby.ts)
     if (touch) this.buildTouch(root, input);
   }
@@ -378,69 +385,6 @@ export class Hud {
     mk(right, "STICK", "stick");
   }
 
-  /** Dashcam close-up of the driver for half a second (clearing a tall vehicle). */
-  faceCam(mood: "shock" | "cool"): void {
-    if (this.resultOpen) return;
-    const c = this.faceEl,
-      g = c.getContext("2d")!;
-    const W = c.width,
-      H = c.height;
-    g.fillStyle = "#1a1d24";
-    g.fillRect(0, 0, W, H);
-    // window light + seat
-    g.fillStyle = "#3a4458";
-    g.fillRect(0, 0, W, H * 0.55);
-    g.fillStyle = "#2b2b30";
-    g.fillRect(W * 0.2, H * 0.3, W * 0.6, H * 0.8);
-    // head
-    g.fillStyle = "#f2c6a0";
-    g.beginPath();
-    g.ellipse(W / 2, H * 0.52, 48, 56, 0, 0, Math.PI * 2);
-    g.fill();
-    g.fillStyle = "#3b2a20";
-    g.beginPath();
-    g.ellipse(W / 2, H * 0.3, 52, 26, 0, Math.PI, 0);
-    g.fill();
-    // eyes
-    const eyeR = mood === "shock" ? 11 : 7;
-    for (const s of [-1, 1]) {
-      g.fillStyle = "#fff";
-      g.beginPath();
-      g.arc(W / 2 + s * 20, H * 0.47, eyeR, 0, Math.PI * 2);
-      g.fill();
-      g.fillStyle = "#111";
-      g.beginPath();
-      g.arc(
-        W / 2 + s * 20,
-        H * 0.47 + (mood === "shock" ? 0 : 2),
-        eyeR * 0.45,
-        0,
-        Math.PI * 2,
-      );
-      g.fill();
-    }
-    // mouth
-    g.fillStyle = "#6a1f1f";
-    g.beginPath();
-    if (mood === "shock") g.ellipse(W / 2, H * 0.7, 13, 17, 0, 0, Math.PI * 2);
-    else g.ellipse(W / 2, H * 0.68, 16, 6, 0, 0, Math.PI);
-    g.fill();
-    // seatbelt
-    g.strokeStyle = "#111";
-    g.lineWidth = 9;
-    g.beginPath();
-    g.moveTo(W * 0.78, H * 0.35);
-    g.lineTo(W * 0.3, H);
-    g.stroke();
-    // REC dot
-    g.fillStyle = "#ff3b3b";
-    g.beginPath();
-    g.arc(16, 16, 6, 0, Math.PI * 2);
-    g.fill();
-    this.faceEl.classList.add("show");
-    this.faceT = 0.6;
-  }
-
   /** BREAKING NEWS card, top right: a picture and a one-line headline for ~6 s. */
   news(img: string, headline: string): void {
     if (this.resultOpen) return;
@@ -490,10 +434,6 @@ export class Hud {
     this.arrow.style.transform =
       "rotate(" + (-bearing * 180) / Math.PI + "deg)";
     setText(this.dist, Math.round(s.distanceToOffice / 10) * 10 + "m");
-    if (this.faceT > 0) {
-      this.faceT -= dt;
-      if (this.faceT <= 0) this.faceEl.classList.remove("show");
-    }
     if (this.newsT > 0) {
       this.newsT -= dt;
       if (this.newsT <= 0) this.newsEl.classList.remove("show");
@@ -529,27 +469,28 @@ export class Hud {
     this.drawMini(s);
   }
 
-  /** Wire the SAVE CLIP button; pass null to hide it (recording unsupported). */
+  /** Wire the ending clip's button (e.g. LAST WIPEOUT / sinkhole); pass null to hide it (recording unsupported). */
   setSaveClip(
     handler: ((setLabel: (s: string) => void) => Promise<boolean>) | null,
+    title: string,
+    sub: string,
   ): void {
-    wireSave(this.saveBtn, handler, "SAVE CLIP");
+    wireSave(this.saveBtn, handler, title, sub);
   }
 
-  /** Wire the second save button, the run's best stunt (e.g. SAVE THE RAMP); null hides it. */
+  /** Wire the BEST STUNT clip's button (label: which stunt, e.g. THE RAMP); null hides it. */
   setSaveBest(
     handler: ((setLabel: (s: string) => void) => Promise<boolean>) | null,
     label = "",
   ): void {
-    wireSave(this.bestBtn, handler, "SAVE " + label);
+    wireSave(this.bestBtn, handler, "BEST STUNT", label);
   }
 
   private clearGameplayOverlays(): void {
-    this.newsT = this.faceT = 0;
+    this.newsT = 0;
     this.newsEl.classList.remove("show");
     this.hintEl.classList.remove("show");
     this.hintId = "";
-    this.faceEl.classList.remove("show");
     this.band.classList.remove("show");
     this.crashInfo.classList.remove("show");
     this.penaltyEl.classList.remove("show");
@@ -600,26 +541,46 @@ export class Hud {
     this.resultGrade.textContent = r.grade;
     this.resultGrade.className = "grade g" + r.grade;
     const left = Math.floor(r.timeLeft);
-    this.resultTime.textContent = r.finished
-      ? "+" + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
-      : "9:00:00";
-    this.resultCrash.textContent = "WIPEOUT ×" + r.crashes;
-    this.resultPersona.textContent = r.persona;
-    this.resultViews.replaceChildren();
-    el("b", "", this.resultViews, viewsText(r.finalViews) + " VIEWS");
-    el(
-      "span",
-      "",
-      this.resultViews,
-      viewsText(r.views) + (r.finished ? " x2 ON TIME" : " x0.5 LATE"),
+    const tile = (
+      t: HTMLElement,
+      label: string,
+      big: string,
+      small: string,
+    ) => {
+      t.replaceChildren();
+      el("span", "", t, label);
+      el("b", "", t, big);
+      el("small", "", t, small);
+    };
+    tile(
+      this.resultTime,
+      "TIME",
+      r.finished
+        ? "+" + Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0")
+        : "9:00:00",
+      r.finished ? "to spare" : "missed the bell",
     );
+    tile(
+      this.resultCrash,
+      "WIPEOUTS",
+      String(r.crashes),
+      r.crashes ? "replays cost time" : "clean run",
+    );
+    tile(
+      this.resultViews,
+      "VIEWS",
+      viewsText(r.finalViews),
+      viewsText(r.views) + (r.finished ? " x2 on time" : " x0.5 late"),
+    );
+    this.resultPersona.textContent = r.persona;
     const titles = r.newClips
       .map((id) => CLIPS.find((c) => c.id === id)?.title)
       .filter(Boolean);
-    setText(
-      this.resultCards,
-      titles.length ? "NEW CLIPS: " + titles.join(", ") : "",
-    );
+    this.resultCards.replaceChildren();
+    if (titles.length) {
+      el("span", "lb-h", this.resultCards, "NEW CLIPS");
+      for (const t of titles) el("i", "", this.resultCards, t);
+    }
     this.result.classList.remove("hidden");
     const close = (then: () => void) => () => {
       if (!this.resultOpen || this.creditsOpen) return;
