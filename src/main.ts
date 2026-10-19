@@ -25,6 +25,7 @@ import {
 import { createScene } from "./render/scene";
 import { NpcRenderer, buildPlayerCar } from "./render/vehicles";
 import { Hud, crashCause } from "./ui/hud";
+import { Telemetry, anonId, beacon } from "./telemetry";
 import { Lobby } from "./ui/lobby";
 import { CLIPS } from "./game/score";
 import { rampWorld } from "./game/venue";
@@ -72,6 +73,19 @@ const load = (k: string) => loadP(store, k);
 const save = (k: string, v: string) => saveP(store, k, v);
 const readSet = (k: string) => parseSet(load(k));
 const saveSet = (k: string, s: Set<string>) => saveSetMerged(store, k, s);
+// anonymous play counts (src/telemetry.ts): the published site only
+const telemetry = new Telemetry(
+  import.meta.env.PROD && location.protocol === "https:"
+    ? beacon(new URL("api/play", document.baseURI).href)
+    : null,
+  anonId(store),
+  isTouch ? "touch" : "desktop",
+);
+telemetry.event("visit");
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) telemetry.flush();
+});
+window.addEventListener("pagehide", () => telemetry.flush());
 const known = readSet("lr.cards");
 const tipsShown = readSet("lr.tips");
 let bestViews = finiteOr(load("lr.bestViews"), 0);
@@ -273,6 +287,7 @@ function moveOn(): void {
 
 /** Back to the lobby, with the next commute already set up behind it. */
 function openLobby(): void {
+  telemetry.flush();
   paused = true;
   clip.discard();
   if (started || session.free) {
@@ -291,6 +306,7 @@ function begin(free: boolean): void {
   }
   lobby.hide();
   input.setGameplayEnabled(true);
+  telemetry.event("start", free ? "free" : "run");
   started = true;
   paused = false;
   acc = 0;
@@ -701,6 +717,15 @@ function frame(now: number): void {
   last = now;
   wall += dt;
   const car = session.car;
+  // play time: a commute or free roam on screen and running (not the lobby, the credits or a result card)
+  telemetry.tick(
+    dt,
+    started && !paused && !hud.paused && session.state === "run"
+      ? session.free
+        ? "free"
+        : "run"
+      : null,
+  );
   if (session.state === "run" && !paused && !hud.paused) {
     // Drop excess debt rather than accumulating an unbounded catch-up backlog.
     // over the ramp's lip the world slows down for a moment (the car hangs upside down at the top), then snaps back;
@@ -740,6 +765,7 @@ function frame(now: number): void {
     if (session.result && !resultShown) {
       resultShown = true;
       const res = session.result;
+      telemetry.event("end", "run", { grade: res.grade, fin: res.finished });
       acc = 0;
       void clip.stop();
       // Use the recording timeline, not simulation time (slow frames/hidden tabs can diverge).

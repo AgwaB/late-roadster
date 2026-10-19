@@ -6,4 +6,6 @@ __pycache__/
 *.pyc
 # game-qa (tkymx/game-qa, MIT) is cloned here by scripts/qa.sh setup; its runs write to .game-qa/
 tools/game-qa/
+# wrangler pages dev (local test of functions/)
+.wrangler/
 .game-qa/

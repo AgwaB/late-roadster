@@ -70,6 +70,15 @@ scripts/      baseline.ts — bot runs for difficulty tuning (npx vite-node scri
 
 Dev console: `lr.start()`, `lr.lobby()`, `lr.unlockAll(true|false)`, `lr.teleport(x, y, heading)`, `lr.commute(i)`, `lr.clearTraffic()`, `lr.session`, `lr.city`, `lr.pinCam([x, y, h], [x, y, h])` / `lr.pinCam(null)`.
 
+## Play counts
+
+The published site counts plays anonymously, to see how many people play and for how long: a random ID kept in
+localStorage (no cookies, nothing personal), page visits, when a commute or free roam starts and when a commute ends
+(grade, on time), the seconds actually played, and the country Cloudflare reports. They are kept for three months in
+Cloudflare Workers Analytics Engine ([functions/api/play.ts](functions/api/play.ts), sent by
+[src/telemetry.ts](src/telemetry.ts)); nothing is sent from the dev server or local builds. `node scripts/stats.mjs`
+prints players, commutes and minutes played.
+
 ## Credits (third-party assets)
 
 See the in-game CREDITS button and the folder notices below. The player and fellow commuters use the silver `roadster_r3`, made in Blender from generated reference images for Late Roadster (CC0). Traffic, props and buildings from poly.pizza use CC0 (Quaternius, Kenney, Kay Lousberg) or CC BY 4.0 (Poly by Google, Zsky, Ev Amitay, Nick Ladd). Poly Haven supplies the CC0 modular facade kit assembled into `euro_*` buildings, and the `kloofendal_48d_partly_cloudy_puresky` sky. Kenney Car Kit supplies CC0 cones; ambientCG supplies CC0 textures. Trees are Blender-rendered billboards (`tools/blender/tree_billboard.py`). Photo textures are generated project images with fictional brands, not photographs of real locations.
